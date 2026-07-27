@@ -86,13 +86,12 @@ impl YoutubeGasClient {
         payload: Value,
         idempotency_key: Option<&str>,
     ) -> Result<Value, YoutubeClientError> {
-        let mut body = prepare_payload(
-            action,
-            payload,
-            idempotency_key,
-            self.allow_public_actions,
-        )?;
-        body.insert("action".to_string(), Value::String(action.as_str().to_string()));
+        let mut body =
+            prepare_payload(action, payload, idempotency_key, self.allow_public_actions)?;
+        body.insert(
+            "action".to_string(),
+            Value::String(action.as_str().to_string()),
+        );
         body.insert("apiKey".to_string(), Value::String(self.api_key.clone()));
 
         let response = self
@@ -141,15 +140,11 @@ impl YoutubeGasClient {
             });
         }
 
-        let envelope: GasEnvelope = serde_json::from_slice(&bytes).map_err(|source| {
-            YoutubeClientError::InvalidJson {
+        let envelope: GasEnvelope =
+            serde_json::from_slice(&bytes).map_err(|source| YoutubeClientError::InvalidJson {
                 source,
-                preview: String::from_utf8_lossy(&bytes)
-                    .chars()
-                    .take(500)
-                    .collect(),
-            }
-        })?;
+                preview: String::from_utf8_lossy(&bytes).chars().take(500).collect(),
+            })?;
 
         if envelope.ok {
             Ok(envelope.data.unwrap_or(Value::Null))
@@ -435,11 +430,12 @@ impl YoutubeClientError {
         match self {
             Self::Http(_) => "YOUTUBE_GAS_HTTP_ERROR",
             Self::ResponseTooLarge { .. } => "YOUTUBE_GAS_RESPONSE_TOO_LARGE",
-            Self::UpstreamHttp { status, location, .. }
-                if status.is_redirection()
-                    && location
-                        .as_deref()
-                        .is_some_and(|value| value.contains("accounts.google.com")) =>
+            Self::UpstreamHttp {
+                status, location, ..
+            } if status.is_redirection()
+                && location
+                    .as_deref()
+                    .is_some_and(|value| value.contains("accounts.google.com")) =>
             {
                 "YOUTUBE_GAS_OWNER_ONLY"
             }
@@ -538,7 +534,10 @@ mod tests {
 
     #[test]
     fn parses_only_supported_actions() {
-        assert_eq!(YoutubeAction::parse("channel"), Some(YoutubeAction::Channel));
+        assert_eq!(
+            YoutubeAction::parse("channel"),
+            Some(YoutubeAction::Channel)
+        );
         assert_eq!(YoutubeAction::parse("rotateApiKey"), None);
         assert_eq!(YoutubeAction::parse("setup"), None);
     }
@@ -606,23 +605,7 @@ mod tests {
 
     #[test]
     fn mutating_actions_require_idempotency_header() {
-        assert!(
-            prepare_payload(
-                YoutubeAction::SendDigest,
-                json!({}),
-                None,
-                false
-            )
-            .is_err()
-        );
-        assert!(
-            prepare_payload(
-                YoutubeAction::Channel,
-                json!({}),
-                None,
-                false
-            )
-            .is_ok()
-        );
+        assert!(prepare_payload(YoutubeAction::SendDigest, json!({}), None, false).is_err());
+        assert!(prepare_payload(YoutubeAction::Channel, json!({}), None, false).is_ok());
     }
 }

@@ -70,7 +70,10 @@ async fn ready(State(state): State<AppState>) -> Json<Value> {
 /// exercises DNS, TLS, redirect handling, deployment access, and JSON parsing.
 async fn youtube_health(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let request_id = request_id();
-    let client = state.youtube.as_ref().ok_or_else(ApiError::youtube_not_configured)?;
+    let client = state
+        .youtube
+        .as_ref()
+        .ok_or_else(ApiError::youtube_not_configured)?;
     let started = Instant::now();
     match client.health().await {
         Ok(upstream) => Ok(Json(json!({
@@ -91,7 +94,10 @@ async fn youtube_status(
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     authorize(&state, &headers)?;
-    let client = state.youtube.as_ref().ok_or_else(ApiError::youtube_not_configured)?;
+    let client = state
+        .youtube
+        .as_ref()
+        .ok_or_else(ApiError::youtube_not_configured)?;
     Ok(Json(json!({
         "ok": true,
         "data": {
@@ -124,7 +130,10 @@ async fn youtube_action(
         .as_deref()
         .map(ToOwned::to_owned)
         .unwrap_or_else(request_id);
-    let client = state.youtube.as_ref().ok_or_else(ApiError::youtube_not_configured)?;
+    let client = state
+        .youtube
+        .as_ref()
+        .ok_or_else(ApiError::youtube_not_configured)?;
     let audit_fields = redact_map_for_audit(&payload);
     let started = Instant::now();
 

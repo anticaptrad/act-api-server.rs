@@ -55,17 +55,17 @@ mod tests {
             HeaderValue::from_static("Bearer this-is-a-long-administrative-api-key"),
         );
         assert_eq!(
-            require_bearer(
-                &headers,
-                Some("this-is-a-long-administrative-api-key")
-            ),
+            require_bearer(&headers, Some("this-is-a-long-administrative-api-key")),
             Ok(())
         );
     }
 
     #[test]
     fn rejects_missing_or_incorrect_credentials() {
-        assert_eq!(require_bearer(&HeaderMap::new(), None), Err(AuthFailure::NotConfigured));
+        assert_eq!(
+            require_bearer(&HeaderMap::new(), None),
+            Err(AuthFailure::NotConfigured)
+        );
         assert_eq!(
             require_bearer(&HeaderMap::new(), Some("expected")),
             Err(AuthFailure::Missing)

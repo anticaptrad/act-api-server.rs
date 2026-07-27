@@ -33,10 +33,10 @@ pub struct YoutubeConfig {
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         let port = parse_env("PORT", 8080_u16)?;
-        let nats_url = env_non_empty("NATS_URL")
-            .unwrap_or_else(|| "nats://localhost:4222".to_string());
-        let service_name = env_non_empty("OTEL_SERVICE_NAME")
-            .unwrap_or_else(|| "act-api-server".to_string());
+        let nats_url =
+            env_non_empty("NATS_URL").unwrap_or_else(|| "nats://localhost:4222".to_string());
+        let service_name =
+            env_non_empty("OTEL_SERVICE_NAME").unwrap_or_else(|| "act-api-server".to_string());
 
         let admin_api_key = env_non_empty("ADMIN_API_KEY");
         if let Some(key) = admin_api_key.as_deref() {
