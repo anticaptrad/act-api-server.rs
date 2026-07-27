@@ -281,7 +281,7 @@ impl ApiError {
     }
 
     fn from_youtube(error: YoutubeClientError, request_id: String) -> Self {
-        let status = match error {
+        let status = match &error {
             YoutubeClientError::Validation(_) => StatusCode::BAD_REQUEST,
             _ => StatusCode::BAD_GATEWAY,
         };
