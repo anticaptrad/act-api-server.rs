@@ -39,10 +39,10 @@ impl Config {
             .unwrap_or_else(|| "act-api-server".to_string());
 
         let admin_api_key = env_non_empty("ADMIN_API_KEY");
-        if let Some(key) = admin_api_key.as_deref()
-            && key.len() < 32
-        {
-            bail!("ADMIN_API_KEY must be at least 32 characters when configured");
+        if let Some(key) = admin_api_key.as_deref() {
+            if key.len() < 32 {
+                bail!("ADMIN_API_KEY must be at least 32 characters when configured");
+            }
         }
 
         let gas_url = env_non_empty("YOUTUBE_GAS_URL");
