@@ -1,7 +1,8 @@
 [package]
 name = "act_api_server"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
+rust-version = "1.85"
 
 [dependencies]
 tokio = { version = "1.37.0", features = ["full"] }
@@ -17,7 +18,9 @@ opentelemetry-otlp = "0.14.0"
 async-nats = "0.33"
 futures = "0.3"
 anyhow = "1.0"
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
 
 [profile.release]
 strip = true
 lto = "thin"
+codegen-units = 1
