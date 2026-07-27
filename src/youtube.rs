@@ -130,13 +130,10 @@ impl YoutubeGasClient {
         }
 
         if !status.is_success() {
-            let body = String::from_utf8_lossy(&bytes);
-            let body = body.chars().take(500).collect::<String>();
             return Err(YoutubeClientError::UpstreamHttp {
                 status,
                 final_url,
                 location,
-                body,
             });
         }
 
@@ -415,7 +412,6 @@ pub enum YoutubeClientError {
         status: StatusCode,
         final_url: Url,
         location: Option<String>,
-        body: String,
     },
     InvalidJson {
         source: serde_json::Error,
@@ -456,7 +452,6 @@ impl YoutubeClientError {
                 status,
                 final_url,
                 location,
-                body,
             } => Some(serde_json::json!({
                 "status": status.as_u16(),
                 "finalHost": final_url.host_str(),
@@ -464,7 +459,6 @@ impl YoutubeClientError {
                     .as_deref()
                     .and_then(|value| Url::parse(value).ok())
                     .and_then(|url| url.host_str().map(ToOwned::to_owned)),
-                "bodyPreview": body,
             })),
             Self::ResponseTooLarge { max_bytes } => {
                 Some(serde_json::json!({ "maxBytes": max_bytes }))
