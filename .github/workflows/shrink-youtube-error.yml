@@ -30,72 +30,23 @@ jobs:
 
           path = Path('src/youtube.rs')
           text = path.read_text()
-
-          old = '''        if !status.is_success() {
-              let body = String::from_utf8_lossy(&bytes);
-              let body = body.chars().take(500).collect::<String>();
-              return Err(YoutubeClientError::UpstreamHttp {
-                  status,
-                  final_url,
-                  location,
-                  body,
-              });
-          }'''
-          new = '''        if !status.is_success() {
-              return Err(YoutubeClientError::UpstreamHttp {
-                  status,
-                  final_url,
-                  location,
-              });
-          }'''
-          if old not in text:
-              raise SystemExit('upstream response constructor not found')
-          text = text.replace(old, new, 1)
-
-          old = '''    UpstreamHttp {
-              status: StatusCode,
-              final_url: Url,
-              location: Option<String>,
-              body: String,
-          },'''
-          new = '''    UpstreamHttp {
-              status: StatusCode,
-              final_url: Url,
-              location: Option<String>,
-          },'''
-          if old not in text:
-              raise SystemExit('upstream error variant not found')
-          text = text.replace(old, new, 1)
-
-          old = '''            Self::UpstreamHttp {
-                  status,
-                  final_url,
-                  location,
-                  body,
-              } => Some(serde_json::json!({
-                  "status": status.as_u16(),
-                  "finalHost": final_url.host_str(),
-                  "locationHost": location
-                      .as_deref()
-                      .and_then(|value| Url::parse(value).ok())
-                      .and_then(|url| url.host_str().map(ToOwned::to_owned)),
-                  "bodyPreview": body,
-              })),'''
-          new = '''            Self::UpstreamHttp {
-                  status,
-                  final_url,
-                  location,
-              } => Some(serde_json::json!({
-                  "status": status.as_u16(),
-                  "finalHost": final_url.host_str(),
-                  "locationHost": location
-                      .as_deref()
-                      .and_then(|value| Url::parse(value).ok())
-                      .and_then(|url| url.host_str().map(ToOwned::to_owned)),
-              })),'''
-          if old not in text:
-              raise SystemExit('upstream error details block not found')
-          path.write_text(text.replace(old, new, 1))
+          replacements = [
+              (
+                  '            let body = String::from_utf8_lossy(&bytes);\n'
+                  '            let body = body.chars().take(500).collect::<String>();\n',
+                  '',
+              ),
+              ('                body,\n            });', '            });'),
+              ('        body: String,\n', ''),
+              ('                body,\n            } => Some(serde_json::json!({',
+               '            } => Some(serde_json::json!({'),
+              ('                "bodyPreview": body,\n', ''),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f'expected source fragment not found: {old!r}')
+              text = text.replace(old, new, 1)
+          path.write_text(text)
 
       - name: Install rustfmt
         uses: dtolnay/rust-toolchain@stable
