@@ -1,0 +1,103 @@
+name: Fix YouTube branch
+
+on:
+  push:
+    branches:
+      - agent/den-262-youtube-gas-control-plane
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fix-youtube-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Apply compatibility and ownership fixes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          routes = Path('src/routes.rs')
+          text = routes.read_text()
+          old = '''        let status = match error {
+              YoutubeClientError::Validation(_) => StatusCode::BAD_REQUEST,
+              _ => StatusCode::BAD_GATEWAY,
+          };'''
+          new = '''        let status = match &error {
+              YoutubeClientError::Validation(_) => StatusCode::BAD_REQUEST,
+              _ => StatusCode::BAD_GATEWAY,
+          };'''
+          if old not in text:
+              raise SystemExit('routes.rs expected match not found')
+          routes.write_text(text.replace(old, new, 1))
+
+          youtube = Path('src/youtube.rs')
+          text = youtube.read_text()
+          old = '''            if let Some(status) = optional_string(&object, "privacyStatus")?
+                  && status != "private"
+              {
+                  return Err(YoutubeClientError::Validation(
+                      "startUpload must remain private; publish in a separate approved action"
+                          .to_string(),
+                  ));
+              }'''
+          new = '''            if let Some(status) = optional_string(&object, "privacyStatus")? {
+                  if status != "private" {
+                      return Err(YoutubeClientError::Validation(
+                          "startUpload must remain private; publish in a separate approved action"
+                              .to_string(),
+                      ));
+                  }
+              }'''
+          if old not in text:
+              raise SystemExit('youtube.rs privacy let-chain not found')
+          text = text.replace(old, new, 1)
+
+          old = '''            if let Some(existing) = optional_string(&object, "idempotencyKey")?
+                  && existing != header_key
+              {
+                  return Err(YoutubeClientError::Validation(
+                      "body idempotencyKey must match the Idempotency-Key header".to_string(),
+                  ));
+              }'''
+          new = '''            if let Some(existing) = optional_string(&object, "idempotencyKey")? {
+                  if existing != header_key {
+                      return Err(YoutubeClientError::Validation(
+                          "body idempotencyKey must match the Idempotency-Key header".to_string(),
+                      ));
+                  }
+              }'''
+          if old not in text:
+              raise SystemExit('youtube.rs idempotency let-chain not found')
+          youtube.write_text(text.replace(old, new, 1))
+
+      - name: Install Rust 1.85 with formatting
+        uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          components: rustfmt
+
+      - name: Format and compile with declared MSRV
+        run: |
+          cargo fmt --all
+          cargo check --all-targets --all-features
+
+      - name: Commit fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/routes.rs src/youtube.rs Cargo.lock
+          git commit -m 'Fix Rust 1.85 compatibility'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
