@@ -70,3 +70,28 @@ jobs:
       - name: Confirm image runs as non-root
         run: |
           test "$(docker image inspect act-api-server:ci --format '{{.Config.User}}')" = '10001'
+
+  deployed-gas:
+    name: Deployed GAS health
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      GAS_WEB_APP_URL: https://script.google.com/macros/s/AKfycbwXNUnFogkqg_aeobBMLCas21CHJ8eIR8W1AnmEBNx7pPgfio8eARW5J4A-lu_V5gY/exec
+    steps:
+      - name: Exercise ContentService redirect and health response
+        shell: bash
+        run: |
+          set -euo pipefail
+          response="$(curl \
+            --fail-with-body \
+            --silent \
+            --show-error \
+            --location \
+            --max-time 30 \
+            "${GAS_WEB_APP_URL}?action=health")"
+          printf '%s\n' "$response" | jq -e '
+            .ok == true and
+            .data.app == "Anticaptrad YouTube Control Center" and
+            .data.version == "1.0.0" and
+            (.data.timestamp | type == "string")
+          '
