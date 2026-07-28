@@ -89,6 +89,8 @@ impl Config {
             }
         };
 
+        validate_admin_configuration(admin_api_key.as_deref(), youtube.is_some())?;
+
         Ok(Self {
             port,
             nats_url,
@@ -97,6 +99,16 @@ impl Config {
             youtube,
         })
     }
+}
+
+fn validate_admin_configuration(
+    admin_api_key: Option<&str>,
+    youtube_enabled: bool,
+) -> anyhow::Result<()> {
+    if youtube_enabled && admin_api_key.is_none() {
+        bail!("ADMIN_API_KEY is required whenever the YouTube GAS control plane is configured");
+    }
+    Ok(())
 }
 
 fn env_non_empty(name: &str) -> Option<String> {
@@ -152,7 +164,7 @@ fn parse_apps_script_url(raw: &str) -> anyhow::Result<Url> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_apps_script_url;
+    use super::{parse_apps_script_url, validate_admin_configuration};
 
     #[test]
     fn accepts_deployed_apps_script_url() {
@@ -173,5 +185,12 @@ mod tests {
             parse_apps_script_url("https://script.google.com/macros/s/id/exec?apiKey=secret")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn youtube_configuration_requires_separate_admin_key() {
+        assert!(validate_admin_configuration(None, true).is_err());
+        assert!(validate_admin_configuration(Some("configured"), true).is_ok());
+        assert!(validate_admin_configuration(None, false).is_ok());
     }
 }
