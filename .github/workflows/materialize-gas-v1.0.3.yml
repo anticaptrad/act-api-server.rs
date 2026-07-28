@@ -64,16 +64,33 @@ jobs:
           '''.replace('          ', ''))
 
       - name: Commit plaintext source package
+        id: commit_source
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A -- apps-script
-          git diff --cached --quiet && {
-            echo 'No materialized source changes to commit.'
-            exit 1
-          }
-          git commit -m 'Add hardened Anticaptrad GAS v1.0.3 source package'
-          target_branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
-          git push origin "HEAD:${target_branch}"
+          set -o pipefail
+          {
+            set -eux
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git status --short --untracked-files=all
+            git add -f apps-script
+            git status --short --untracked-files=all
+            git diff --cached --stat
+            git commit -m 'Add hardened Anticaptrad GAS v1.0.3 source package'
+            target_branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+            git push origin "HEAD:${target_branch}"
+          } 2>&1 | tee /tmp/materialize-commit.log
+
+      - name: Preserve materialization commit diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gas-materialization-commit-diagnostics
+          path: /tmp/materialize-commit.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Fail when source commit failed
+        if: steps.commit_source.outcome == 'failure'
+        run: exit 1
