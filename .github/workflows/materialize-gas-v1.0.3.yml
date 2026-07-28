@@ -1,0 +1,139 @@
+name: Materialize GAS v1.0.3
+
+on:
+  push:
+    branches:
+      - agent/den-399-harden-gas-http-interface
+
+permissions:
+  contents: write
+
+concurrency:
+  group: materialize-gas-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  materialize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Decode and verify deterministic source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .gas-materialize/*.part | base64 --decode > /tmp/anticaptrad-youtube-gas-v1.0.3.tar.gz
+          printf '%s  %s\n' \
+            'ada2a890167ca28d32437badc1170671fc74c7b8165e7734aa7736404aba4740' \
+            '/tmp/anticaptrad-youtube-gas-v1.0.3.tar.gz' | sha256sum --check
+          mkdir -p apps-script
+          tar -xzf /tmp/anticaptrad-youtube-gas-v1.0.3.tar.gz -C apps-script
+
+      - name: Validate materialized Apps Script package
+        working-directory: apps-script
+        run: npm run check
+
+      - name: Add permanent package CI and source-control notes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/apps-script.yml')
+          workflow.write_text('''name: Validate Apps Script package
+
+          on:
+            push:
+              branches:
+                - main
+                - 'agent/**'
+              paths:
+                - 'apps-script/**'
+                - '.github/workflows/apps-script.yml'
+            pull_request:
+              paths:
+                - 'apps-script/**'
+                - '.github/workflows/apps-script.yml'
+
+          permissions:
+            contents: read
+
+          concurrency:
+            group: gas-${{ github.workflow }}-${{ github.ref }}
+            cancel-in-progress: true
+
+          jobs:
+            validate:
+              runs-on: ubuntu-latest
+              steps:
+                - name: Check out repository
+                  uses: actions/checkout@v4
+
+                - name: Install Node.js
+                  uses: actions/setup-node@v4
+                  with:
+                    node-version: '22'
+
+                - name: Reject unresolved conflict markers
+                  run: |
+                    if grep -RInE '^(<<<<<<<|=======|>>>>>>>)' apps-script; then
+                      echo 'Unresolved Git conflict markers found.' >&2
+                      exit 1
+                    fi
+
+                - name: Validate Apps Script source and profiles
+                  working-directory: apps-script
+                  run: npm run check
+
+                - name: Build review archive
+                  run: |
+                    zip -qr anticaptrad-youtube-gas-v1.0.3.zip apps-script \
+                      -x 'apps-script/node_modules/*'
+                    sha256sum anticaptrad-youtube-gas-v1.0.3.zip \
+                      > anticaptrad-youtube-gas-v1.0.3.zip.sha256
+
+                - name: Upload validated package
+                  uses: actions/upload-artifact@v4
+                  with:
+                    name: anticaptrad-youtube-gas-v1.0.3
+                    path: |
+                      anticaptrad-youtube-gas-v1.0.3.zip
+                      anticaptrad-youtube-gas-v1.0.3.zip.sha256
+                    if-no-files-found: error
+                    retention-days: 14
+          '''.replace('          ', ''))
+
+          Path('apps-script/SOURCE-CONTROL.md').write_text('''# Source-control ownership
+
+          This directory is the reviewed source of the Anticaptrad YouTube Google Apps Script web app associated with Linear DEN-399 and Script ID `17WBBEktK2see20TEwXijscSIkL9Ua-Ylp-_Q9V6IGHXtYCIg_xBQE6yJ`.
+
+          The Rust server remains the authenticated control plane. Apps Script owns Google OAuth and Google API calls. Public HTTP deployment must use the `http-api` profile, while the owner dashboard uses an owner-only profile.
+
+          Deployment changes require `npm run check`, a feature branch, and pull-request review. Never commit generated API keys, OAuth tokens, Drive identifiers containing private data, or channel credentials.
+          '''.replace('          ', ''))
+
+          for path in sorted(Path('.gas-materialize').glob('*.part')):
+              path.unlink()
+          Path('.gas-materialize').rmdir()
+          Path('.github/workflows/materialize-gas-v1.0.3.yml').unlink()
+
+      - name: Commit plaintext source package
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A -- apps-script .gas-materialize \
+            .github/workflows/materialize-gas-v1.0.3.yml \
+            .github/workflows/apps-script.yml
+          git commit -m 'Add hardened Anticaptrad GAS v1.0.3 source package'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
