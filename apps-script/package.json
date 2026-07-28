@@ -1,0 +1,30 @@
+{
+  "name": "anticaptrad-youtube-gas",
+  "version": "1.0.3",
+  "private": true,
+  "description": "Google Apps Script web app for managing the Anticaptrad YouTube channel.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "check": "npm run check:core && npm run check:profiles && npm run check:http-security",
+    "check:core": "python3 tests/validate_project.py",
+    "check:profiles": "python3 tests/validate_profiles.py",
+    "bind": "node scripts/bind-project.mjs",
+    "create": "node scripts/bind-project.mjs",
+    "create:new": "node scripts/create-project.mjs",
+    "backup:remote": "node scripts/backup-remote.mjs",
+    "push": "clasp push --force",
+    "status": "clasp show-file-status",
+    "open": "clasp open-script",
+    "profile:default": "node scripts/use-profile.mjs default",
+    "profile:monetization": "node scripts/use-profile.mjs monetization",
+    "profile:partner": "node scripts/use-profile.mjs partner",
+    "profile:workspace-admin": "node scripts/use-profile.mjs workspace-admin",
+    "profile:http-api": "node scripts/use-profile.mjs http-api",
+    "check:http-security": "python3 tests/validate_http_security.py"
+  },
+  "devDependencies": {
+    "@google/clasp": "3.3.0"
+  }
+}

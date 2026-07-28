@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Anticaptrad YouTube Control Center</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b0d10; --panel:#151920; --panel2:#1d232c; --text:#f4f7fb; --muted:#9aa7b6; --line:#2b3441; --ok:#78dba9; --warn:#f5ca72; --bad:#ff8585; --accent:#ef4e4e; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:14px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); }
+    header { position:sticky; top:0; z-index:5; display:flex; gap:16px; align-items:center; justify-content:space-between; padding:16px 22px; background:rgba(11,13,16,.94); border-bottom:1px solid var(--line); backdrop-filter:blur(10px); }
+    h1 { margin:0; font-size:18px; } h2 { margin:0 0 12px; font-size:17px; } h3 { margin:0 0 8px; font-size:14px; }
+    .brand { display:flex; align-items:center; gap:10px; } .logo { width:34px; height:24px; border-radius:7px; display:grid; place-items:center; background:var(--accent); font-size:13px; }
+    .status { color:var(--muted); font-size:12px; }
+    main { max-width:1250px; margin:auto; padding:22px; }
+    nav { display:flex; gap:8px; overflow:auto; margin-bottom:18px; padding-bottom:4px; }
+    nav button { white-space:nowrap; background:transparent; color:var(--muted); border:1px solid var(--line); }
+    nav button.active { color:var(--text); background:var(--panel2); border-color:#59687b; }
+    button { border:0; border-radius:8px; padding:9px 12px; background:#303a47; color:var(--text); cursor:pointer; font-weight:650; }
+    button:hover { filter:brightness(1.12); } button:disabled { opacity:.48; cursor:not-allowed; }
+    button.primary { background:var(--accent); } button.good { background:#26734d; } button.ghost { background:transparent; border:1px solid var(--line); }
+    .grid { display:grid; grid-template-columns:repeat(12,1fr); gap:14px; }
+    .card { grid-column:span 4; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; min-width:0; }
+    .card.wide { grid-column:span 8; } .card.full { grid-column:1/-1; }
+    .metric { font-size:28px; font-weight:750; margin:6px 0 2px; } .muted { color:var(--muted); }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; } .between { justify-content:space-between; }
+    label { display:block; color:var(--muted); font-size:12px; margin:0 0 5px; }
+    input,textarea,select { width:100%; border:1px solid var(--line); border-radius:8px; padding:9px 10px; color:var(--text); background:#0f1318; outline:none; }
+    textarea { min-height:95px; resize:vertical; } input:focus,textarea:focus,select:focus { border-color:#667890; }
+    .form-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+    .field.full { grid-column:1/-1; }
+    .check { display:flex; gap:8px; align-items:flex-start; color:var(--text); } .check input { width:auto; margin-top:3px; }
+    table { width:100%; border-collapse:collapse; font-size:12px; } th,td { text-align:left; border-bottom:1px solid var(--line); padding:9px 7px; vertical-align:top; } th { color:var(--muted); position:sticky; top:0; background:var(--panel); }
+    .table-wrap { overflow:auto; max-height:520px; }
+    .pill { display:inline-block; padding:3px 7px; border-radius:999px; background:#2a333f; font-size:11px; }
+    .pill.ok { color:var(--ok); } .pill.warn { color:var(--warn); } .pill.bad { color:var(--bad); }
+    .progress { height:7px; background:#090b0e; border-radius:99px; overflow:hidden; margin-top:6px; } .progress > span { display:block; height:100%; background:var(--accent); }
+    .notice { border:1px solid var(--line); border-left:3px solid var(--warn); background:#171715; padding:11px 12px; border-radius:8px; margin-bottom:14px; }
+    .notice.ok { border-left-color:var(--ok); background:#111a16; } .notice.bad { border-left-color:var(--bad); background:#1c1212; }
+    .tab { display:none; } .tab.active { display:block; }
+    pre { white-space:pre-wrap; word-break:break-word; max-height:300px; overflow:auto; background:#090b0e; border:1px solid var(--line); padding:12px; border-radius:8px; font-size:11px; }
+    a { color:#8bc5ff; }
+    .video { display:grid; grid-template-columns:120px 1fr auto; gap:12px; padding:10px 0; border-bottom:1px solid var(--line); } .video img { width:120px; aspect-ratio:16/9; object-fit:cover; border-radius:7px; background:#000; }
+    .spinner { display:inline-block; width:14px; height:14px; border:2px solid #667; border-top-color:white; border-radius:50%; animation:spin .8s linear infinite; vertical-align:-2px; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    @media (max-width:850px) { .card,.card.wide { grid-column:1/-1; } .form-grid { grid-template-columns:1fr; } .video { grid-template-columns:90px 1fr; } .video img { width:90px; } }
+  </style>
+</head>
+<body>
+<header>
+  <div class="brand"><div class="logo">▶</div><div><h1>Anticaptrad YouTube Control Center</h1><div class="status" id="headerStatus">Loading…</div></div></div>
+  <div class="row"><button class="ghost" onclick="refreshAll()">Refresh</button><button class="primary" onclick="runSetup()">First-run setup</button></div>
+</header>
+<main>
+  <div id="flash"></div>
+  <nav id="tabs">
+    <button class="active" data-tab="overview">Overview</button>
+    <button data-tab="upload">Upload</button>
+    <button data-tab="analytics">Analytics</button>
+    <button data-tab="videos">Videos</button>
+    <button data-tab="inbox">Gmail / Drive</button>
+    <button data-tab="settings">Settings</button>
+  </nav>
+
+  <section class="tab active" id="overview">
+    <div class="grid">
+      <div class="card"><h3>Subscribers</h3><div class="metric" id="subscribers">—</div><div class="muted" id="channelHandle">Not authorized</div></div>
+      <div class="card"><h3>Channel views</h3><div class="metric" id="channelViews">—</div><div class="muted">YouTube Data API</div></div>
+      <div class="card"><h3>Videos</h3><div class="metric" id="videoCount">—</div><div class="muted">Uploaded to this channel</div></div>
+      <div class="card wide"><div class="row between"><h2>Upload queue</h2><button onclick="processAll()">Process pending</button></div><div id="jobs"></div></div>
+      <div class="card"><h2>Capabilities</h2><div id="capabilities"></div></div>
+    </div>
+  </section>
+
+  <section class="tab" id="upload">
+    <div class="grid">
+      <div class="card wide">
+        <h2>Queue a private upload</h2>
+        <div class="notice">The source file is copied to the Drive backup folder before upload. Every new upload is private. Large files use resumable 8 MB chunks.</div>
+        <form id="uploadForm" onsubmit="queueUpload(event)">
+          <div class="form-grid">
+            <div class="field"><label>Drive video file ID</label><input name="driveFileId" required placeholder="1AbC…"></div>
+            <div class="field"><label>Title</label><input name="title" required maxlength="100"></div>
+            <div class="field full"><label>Description</label><textarea name="description" maxlength="5000"></textarea></div>
+            <div class="field"><label>Tags, comma-separated</label><input name="tags"></div>
+            <div class="field"><label>Category ID</label><input name="categoryId" value="22"></div>
+            <div class="field"><label>Language</label><input name="defaultLanguage" value="en"></div>
+            <div class="field"><label>Optional thumbnail Drive file ID</label><input name="thumbnailDriveFileId"></div>
+            <div class="field"><label>Optional playlist ID</label><input name="playlistId"></div>
+            <div class="field"><label>Source repository</label><input name="repository" value="https://github.com/anticaptrad"></div>
+            <div class="field"><label>Source commit</label><input name="commit"></div>
+            <div class="field full"><label>Audience</label><select name="madeForKids" required><option value="">Choose explicitly</option><option value="false">No, not made for kids</option><option value="true">Yes, made for kids</option></select></div>
+            <div class="field full"><label class="check"><input type="checkbox" name="rightsConfirmed" required><span>I confirm Anticaptrad owns or has permission to upload this video and associated media.</span></label></div>
+          </div>
+          <div class="row" style="margin-top:14px"><button class="primary" type="submit">Back up and queue private upload</button></div>
+        </form>
+      </div>
+      <div class="card"><h2>Why private?</h2><p class="muted">New unverified YouTube API projects can be restricted to private uploads. Publishing is a separate, explicit action and is disabled until enabled in Settings.</p></div>
+    </div>
+  </section>
+
+  <section class="tab" id="analytics">
+    <div class="grid">
+      <div class="card full">
+        <div class="row between"><h2>Channel analytics</h2><div class="row"><button onclick="loadAnalytics(false)">Run report</button><button class="good" onclick="loadAnalytics(true)">Export to Drive</button></div></div>
+        <div class="form-grid" style="margin-bottom:12px">
+          <div><label>Start date</label><input type="date" id="analyticsStart"></div>
+          <div><label>End date</label><input type="date" id="analyticsEnd"></div>
+          <div><label>Dimensions</label><select id="analyticsDimension"><option value="day">Day</option><option value="video">Video</option><option value="country">Country</option><option value="deviceType">Device type</option><option value="trafficSourceType">Traffic source</option></select></div>
+          <div><label>Metrics</label><input id="analyticsMetrics" value="views,estimatedMinutesWatched,averageViewDuration,subscribersGained"></div>
+        </div>
+        <div id="analyticsResult" class="table-wrap"><div class="muted">Run a report to see data.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="tab" id="videos">
+    <div class="grid"><div class="card full"><div class="row between"><h2>Recent uploads</h2><button onclick="loadVideos()">Reload videos</button></div><div id="videoList"></div></div></div>
+  </section>
+
+  <section class="tab" id="inbox">
+    <div class="grid">
+      <div class="card wide"><h2>Import small Gmail video attachments</h2><div class="notice">Create a Gmail label named <strong>anticaptrad-video-inbox</strong>. Attachments up to 20 MB are copied into the Drive Inbox. Use Drive directly for normal or large videos.</div><label>Gmail search query</label><input id="gmailQuery" value="label:anticaptrad-video-inbox has:attachment"><div class="row" style="margin-top:12px"><button onclick="ingestGmail()">Import attachments</button><button onclick="sendDigest()">Email operations digest</button></div><pre id="gmailResult">No import run yet.</pre></div>
+      <div class="card"><h2>Drive folders</h2><div id="folderInfo" class="muted">Run first-run setup.</div></div>
+    </div>
+  </section>
+
+  <section class="tab" id="settings">
+    <div class="grid">
+      <div class="card wide"><h2>Safety and identity</h2><div class="form-grid">
+        <div><label>Expected YouTube handle</label><input id="expectedHandle" value="@anticaptrad"></div>
+        <div><label>Expected channel ID</label><input id="expectedChannelId" readonly></div>
+        <div><label>Notification email</label><input id="notificationEmail" type="email"></div>
+        <div><label class="check" style="margin-top:24px"><input id="allowPublic" type="checkbox"><span>Enable unlisted/public transitions</span></label></div>
+        <div><label>Optional YouTube Content Owner ID</label><input id="contentOwnerId"></div>
+        <div><label>Optional Workspace customer ID</label><input id="workspaceCustomerId" placeholder="my_customer"></div>
+      </div><div class="row" style="margin-top:12px"><button onclick="saveSettings()">Save settings</button></div></div>
+      <div class="card"><h2>HTTP API key</h2><div id="apiKeyState" class="muted">Not loaded.</div><button style="margin-top:12px" onclick="rotateKey()">Rotate and reveal once</button><pre id="apiKeyOutput"></pre></div>
+      <div class="card full"><h2>Raw diagnostics</h2><pre id="rawState">Loading…</pre></div>
+    </div>
+  </section>
+</main>
+<script>
+  let state = null;
+  const $ = (id) => document.getElementById(id);
+  const esc = (value) => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const fmt = (n) => new Intl.NumberFormat('en-US').format(Number(n || 0));
+
+  document.querySelectorAll('#tabs button').forEach(button => button.addEventListener('click', () => {
+    document.querySelectorAll('#tabs button').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    button.classList.add('active'); $(button.dataset.tab).classList.add('active');
+  }));
+
+  function call(action, payload = {}) {
+    $('headerStatus').innerHTML = '<span class="spinner"></span> Working…';
+    return new Promise((resolve, reject) => {
+      google.script.run
+        .withSuccessHandler(result => {
+          $('headerStatus').textContent = state?.channel?.channel?.title || 'Ready';
+          if (!result || !result.ok) reject(result?.error || {message:'Unknown Apps Script error'}); else resolve(result.data);
+        })
+        .withFailureHandler(error => {
+          $('headerStatus').textContent = 'Error'; reject({message:error.message || String(error)});
+        })
+        .rpc(action, payload);
+    });
+  }
+
+  function flash(message, kind = 'ok') {
+    $('flash').innerHTML = `<div class="notice ${kind}">${esc(message)}</div>`;
+    window.scrollTo({top:0, behavior:'smooth'});
+  }
+
+  async function refreshAll() {
+    try { state = await call('bootstrap'); renderState(); }
+    catch (error) { flash(error.message, 'bad'); $('rawState').textContent = JSON.stringify(error, null, 2); }
+  }
+
+  function renderState() {
+    const channel = state.channel?.channel;
+    $('headerStatus').textContent = channel ? `${channel.title} ${channel.handle || ''}` : (state.channelError?.message || 'Setup required');
+    $('subscribers').textContent = channel ? fmt(channel.statistics.subscriberCount) : '—';
+    $('channelViews').textContent = channel ? fmt(channel.statistics.viewCount) : '—';
+    $('videoCount').textContent = channel ? fmt(channel.statistics.videoCount) : '—';
+    $('channelHandle').textContent = channel ? `${channel.title} ${channel.handle || channel.id}` : 'Not authorized';
+    renderJobs(state.jobs || []);
+    $('capabilities').innerHTML = [
+      capability('YouTube Data', Boolean(channel), channel ? 'Authorized' : 'Needs setup'),
+      capability('YouTube Analytics', Boolean(channel), channel ? 'Enabled' : 'Needs setup'),
+      capability('Content ID / Partner', state.partner.available, state.partner.note),
+      capability('Workspace Admin', state.admin.available, state.admin.note)
+    ].join('');
+    const c = state.config || {};
+    $('expectedHandle').value = c.expectedChannelHandle || '@anticaptrad';
+    $('expectedChannelId').value = c.expectedChannelId || '';
+    $('notificationEmail').value = c.notificationEmail || '';
+    $('allowPublic').checked = Boolean(c.allowPublicUploads);
+    $('contentOwnerId').value = c.contentOwnerId || '';
+    $('workspaceCustomerId').value = c.workspaceCustomerId || '';
+    $('apiKeyState').textContent = c.apiKeyConfigured ? `Configured; ending in ${c.apiKeyLast4}` : 'Not configured.';
+    $('analyticsStart').value ||= state.defaults.analyticsStartDate;
+    $('analyticsEnd').value ||= state.defaults.analyticsEndDate;
+    $('folderInfo').innerHTML = c.rootFolderId ? `Root folder ID:<br><code>${esc(c.rootFolderId)}</code>` : 'Run first-run setup.';
+    $('rawState').textContent = JSON.stringify(state, null, 2);
+  }
+
+  function capability(name, yes, note) {
+    return `<div style="margin-bottom:12px"><div class="row between"><strong>${esc(name)}</strong><span class="pill ${yes?'ok':'warn'}">${yes?'Ready':'Optional'}</span></div><div class="muted">${esc(note)}</div></div>`;
+  }
+
+  function renderJobs(jobs) {
+    if (!jobs.length) { $('jobs').innerHTML = '<div class="muted">No upload jobs yet.</div>'; return; }
+    $('jobs').innerHTML = jobs.map(job => `<div style="padding:10px 0;border-bottom:1px solid var(--line)">
+      <div class="row between"><div><strong>${esc(job.metadata?.title || job.id)}</strong><div class="muted">${esc(job.status)} · ${esc(job.offsetHuman)} / ${esc(job.totalBytesHuman)}</div></div><div class="row"><span class="pill ${job.status==='complete'?'ok':job.status==='error'?'bad':'warn'}">${esc(job.progressPercent)}%</span>${job.status!=='complete'?`<button onclick="processJob('${esc(job.id)}')">Process</button>`:''}</div></div>
+      <div class="progress"><span style="width:${Number(job.progressPercent || 0)}%"></span></div>
+      ${job.lastError?`<div class="muted" style="color:var(--bad);margin-top:5px">${esc(job.lastError)}</div>`:''}
+      ${job.youtubeVideo?.id?`<div style="margin-top:5px"><a href="https://www.youtube.com/watch?v=${encodeURIComponent(job.youtubeVideo.id)}" target="_blank">Open private video</a></div>`:''}
+    </div>`).join('');
+  }
+
+  async function runSetup() {
+    try {
+      const result = await call('setup', { expectedChannelHandle: $('expectedHandle')?.value || '@anticaptrad', notificationEmail: $('notificationEmail')?.value || '' });
+      if (result.apiKey) $('apiKeyOutput').textContent = result.apiKey.apiKey;
+      flash(result.message); await refreshAll();
+    } catch (error) { flash(error.message, 'bad'); }
+  }
+
+  async function queueUpload(event) {
+    event.preventDefault(); const form = new FormData(event.target); const data = Object.fromEntries(form.entries());
+    data.madeForKids = data.madeForKids === 'true'; data.rightsConfirmed = form.get('rightsConfirmed') === 'on';
+    try { const result = await call('startUpload', data); flash(result.message); event.target.reset(); event.target.categoryId.value='22'; event.target.defaultLanguage.value='en'; event.target.repository.value='https://github.com/anticaptrad'; await refreshAll(); }
+    catch (error) { flash(error.message, 'bad'); }
+  }
+
+  async function processJob(jobId) { try { await call('processUpload', {jobId}); flash('Upload chunk processing completed.'); await refreshAll(); } catch (error) { flash(error.message, 'bad'); } }
+  async function processAll() { try { const result=await call('processAllUploads'); flash(`Processed ${result.processed} pending job(s).`); await refreshAll(); } catch (error) { flash(error.message, 'bad'); } }
+
+  async function loadAnalytics(exportToDrive) {
+    const payload = { startDate:$('analyticsStart').value, endDate:$('analyticsEnd').value, dimensions:[$('analyticsDimension').value], metrics:$('analyticsMetrics').value.split(',').map(x=>x.trim()).filter(Boolean) };
+    try {
+      const result = await call(exportToDrive ? 'exportAnalytics' : 'analytics', payload); const report = exportToDrive ? result.report : result;
+      const header = report.headers.map(h=>`<th>${esc(h.name)}</th>`).join('');
+      const rows = report.rows.map(row=>`<tr>${row.map(cell=>`<td>${esc(cell)}</td>`).join('')}</tr>`).join('');
+      $('analyticsResult').innerHTML = `<div class="muted" style="margin-bottom:8px">${report.rowCount} rows${exportToDrive?` · <a href="${esc(result.csv.url)}" target="_blank">CSV</a> · <a href="${esc(result.json.url)}" target="_blank">JSON</a>`:''}</div><table><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>`;
+    } catch (error) { flash(error.message, 'bad'); }
+  }
+
+  async function loadVideos() {
+    try {
+      const result = await call('videos', {maxResults:25});
+      $('videoList').innerHTML = result.items.length ? result.items.map(v => {
+        const privacyButtons = [
+          v.privacyStatus !== 'private' ? `<button onclick="changePrivacy('${esc(v.id)}','private')">Make private</button>` : '',
+          state?.config?.allowPublicUploads && v.privacyStatus !== 'unlisted' ? `<button onclick="changePrivacy('${esc(v.id)}','unlisted')">Make unlisted</button>` : '',
+          state?.config?.allowPublicUploads && v.privacyStatus !== 'public' ? `<button onclick="changePrivacy('${esc(v.id)}','public')">Make public</button>` : ''
+        ].filter(Boolean).join('');
+        return `<div class="video"><img src="${esc(v.thumbnailUrl)}" alt=""><div><strong>${esc(v.title)}</strong><div class="muted">${esc(v.privacyStatus)} · ${esc(v.publishedAt || '')}</div><div class="muted">${fmt(v.statistics.viewCount)} views · ${fmt(v.statistics.likeCount)} likes</div></div><div class="row"><a href="${esc(v.youtubeUrl)}" target="_blank">Open</a>${privacyButtons}</div></div>`;
+      }).join('') : '<div class="muted">No videos returned.</div>';
+    } catch (error) { flash(error.message, 'bad'); }
+  }
+
+  async function changePrivacy(videoId, privacyStatus) {
+    const phrase = `PUBLISH ${videoId} AS ${privacyStatus.toUpperCase()}`;
+    const confirmation = window.prompt(`Type this exact phrase to continue:
+
+${phrase}`, '');
+    if (confirmation === null) return;
+    try {
+      await call('publishVideo', {videoId, privacyStatus, confirmation});
+      flash(`Video changed to ${privacyStatus}.`);
+      await loadVideos();
+      await refreshAll();
+    } catch (error) { flash(error.message, 'bad'); }
+  }
+
+  async function ingestGmail() { try { const result=await call('ingestGmail',{query:$('gmailQuery').value}); $('gmailResult').textContent=JSON.stringify(result,null,2); flash(`Imported ${result.imported.length} attachment(s).`); } catch(error){ flash(error.message,'bad'); } }
+  async function sendDigest() { try { const result=await call('sendDigest'); flash(`Digest sent to ${result.to}.`); } catch(error){ flash(error.message,'bad'); } }
+
+  async function saveSettings() {
+    try { state.config = await call('saveConfig', { expectedChannelHandle:$('expectedHandle').value, notificationEmail:$('notificationEmail').value, allowPublicUploads:$('allowPublic').checked, contentOwnerId:$('contentOwnerId').value, workspaceCustomerId:$('workspaceCustomerId').value }); flash('Settings saved.'); await refreshAll(); }
+    catch (error) { flash(error.message, 'bad'); }
+  }
+  async function rotateKey() { try { const result=await call('rotateApiKey'); $('apiKeyOutput').textContent=result.apiKey; flash(result.warning,'warn'); await refreshAll(); } catch(error){ flash(error.message,'bad'); } }
+
+  refreshAll();
+</script>
+</body>
+</html>

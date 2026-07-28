@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+import json
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+SRC = ROOT / 'src'
+errors = []
+
+def check(condition, message):
+    if not condition:
+        errors.append(message)
+
+required_files = [
+    SRC / 'appsscript.json',
+    SRC / '00_Config.gs',
+    SRC / '02_WebApp.gs',
+    SRC / '05_YouTubeService.gs',
+    SRC / '06_UploadQueue.gs',
+    SRC / '07_Analytics.gs',
+    SRC / '08_Gmail.gs',
+    SRC / 'Index.html',
+    ROOT / 'README.md',
+    ROOT / 'HTTP-API.md',
+]
+for path in required_files:
+    check(path.exists(), f'Missing required file: {path.relative_to(ROOT)}')
+
+try:
+    manifest = json.loads((SRC / 'appsscript.json').read_text())
+except Exception as exc:
+    manifest = {}
+    errors.append(f'Invalid src/appsscript.json: {exc}')
+
+services = {
+    (item.get('userSymbol'), item.get('serviceId'), item.get('version'))
+    for item in manifest.get('dependencies', {}).get('enabledAdvancedServices', [])
+}
+for service in [
+    ('YouTube', 'youtube', 'v3'),
+    ('YouTubeAnalytics', 'youtubeAnalytics', 'v2'),
+    ('Drive', 'drive', 'v3'),
+    ('Gmail', 'gmail', 'v1'),
+]:
+    check(service in services, f'Missing advanced service: {service}')
+
+scopes = set(manifest.get('oauthScopes', []))
+for scope in [
+    'https://www.googleapis.com/auth/youtube.readonly',
+    'https://www.googleapis.com/auth/youtube.upload',
+    'https://www.googleapis.com/auth/youtube.force-ssl',
+    'https://www.googleapis.com/auth/yt-analytics.readonly',
+    'https://www.googleapis.com/auth/drive',
+    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/script.external_request',
+    'https://www.googleapis.com/auth/script.scriptapp',
+]:
+    check(scope in scopes, f'Missing OAuth scope: {scope}')
+
+check(manifest.get('runtimeVersion') == 'V8', 'Apps Script V8 runtime is required.')
+check(manifest.get('webapp', {}).get('access') == 'MYSELF', 'Default web app access must be MYSELF.')
+check(manifest.get('webapp', {}).get('executeAs') == 'USER_DEPLOYING', 'Default web app must execute as USER_DEPLOYING.')
+
+all_server = '\n'.join(path.read_text() for path in sorted(SRC.glob('*.gs')))
+for function_name in [
+    'doGet', 'doPost', 'rpc', 'setupApplication_', 'getMyChannel_',
+    'getAnalyticsReport_', 'startUploadJob_', 'processUploadJob_',
+    'processAllPendingUploads', 'ingestGmailVideoAttachments_', 'rotateApiKey_'
+]:
+    check(re.search(rf'function\s+{re.escape(function_name)}\s*\(', all_server) is not None,
+          f'Missing function: {function_name}')
+
+check("EXPECTED_CHANNEL_HANDLE: '@anticaptrad'" in all_server,
+      'Default expected channel handle must be @anticaptrad.')
+check("privacyStatus: 'private'" in all_server,
+      'Upload resource must default to private.')
+check('ALLOW_PUBLIC_UPLOADS' in all_server,
+      'Publication safety switch is missing.')
+check('Content-Range' in all_server and 'uploadType=resumable' in all_server,
+      'Resumable upload implementation is missing.')
+check('createSourceBackup_' in all_server and 'Drive.Files.copy' in all_server,
+      'Drive source backup implementation is missing.')
+check('IDEMPOTENCY_PREFIX' in all_server and 'reserveUploadIdempotency_' in all_server,
+      'Upload idempotency implementation is missing.')
+check('syncResumableUploadState_' in all_server and "'Content-Range': 'bytes */'" in all_server,
+      'Resumable upload status reconciliation is missing.')
+check('DEPLOYMENT_PROFILE.PUBLIC_HTTP' in all_server and 'METHOD_NOT_ALLOWED' in all_server,
+      'Public HTTP profile isolation is missing.')
+check('HTTP_ACTION_POLICY' in all_server and 'UI_ONLY_ACTIONS' in all_server,
+      'Public HTTP action allowlist or UI-only action policy is missing.')
+check('controlRequestId' in all_server and 'http.control.failed' in all_server,
+      'Mutating HTTP request correlation/auditing is missing.')
+check('Session.getActiveUser().getEmail()' in all_server and
+      'active && effective && active === effective' in all_server,
+      'Owner UI identity verification is missing.')
+check('sanitizeErrorDetails_' in all_server and "'[redacted]'" in all_server,
+      'HTTP error redaction is missing.')
+check('PUBLISH ' in all_server and 'CONFIRMATION_REQUIRED' in all_server,
+      'Exact-phrase publication confirmation is missing.')
+check((8 * 1024 * 1024) % (256 * 1024) == 0,
+      'Configured upload chunk size must be a multiple of 256 KB.')
+
+create_script = (ROOT / 'scripts' / 'create-project.mjs').read_text()
+check("'--type', 'standalone'" in create_script,
+      'Project creator must create a standalone Apps Script project.')
+check("'--type', 'webapp'" not in create_script,
+      'Project creator must not use the failing webapp container type.')
+check('readScriptId()' in create_script and 'no valid .clasp.json/scriptId was produced' in create_script,
+      'Project creator must verify that clasp produced a valid scriptId.')
+
+expected_script_id = '17WBBEktK2see20TEwXijscSIkL9Ua-Ylp-_Q9V6IGHXtYCIg_xBQE6yJ'
+try:
+    clasp_config = json.loads((ROOT / '.clasp.json').read_text())
+except Exception as exc:
+    clasp_config = {}
+    errors.append(f'Invalid .clasp.json: {exc}')
+check(clasp_config.get('scriptId') == expected_script_id,
+      'Package must target the existing Anticaptrad Apps Script project.')
+check(clasp_config.get('rootDir') == 'src',
+      '.clasp.json rootDir must be src.')
+bind_script = (ROOT / 'scripts' / 'bind-project.mjs').read_text()
+check(expected_script_id in bind_script and "rootDir: 'src'" in bind_script,
+      'Binding script must target the existing Anticaptrad project and src root.')
+package = json.loads((ROOT / 'package.json').read_text())
+check(package.get('scripts', {}).get('create') == 'node scripts/bind-project.mjs',
+      'npm run create must bind the existing project rather than creating another project.')
+check(package.get('scripts', {}).get('create:new') == 'node scripts/create-project.mjs',
+      'Explicit create:new command is required for new-project creation.')
+
+node = shutil.which('node')
+if not node:
+    errors.append('Node.js is required to validate JavaScript syntax.')
+else:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = pathlib.Path(tmp)
+        for gs in sorted(SRC.glob('*.gs')):
+            js = tmp_path / (gs.stem + '.js')
+            js.write_text(gs.read_text())
+            result = subprocess.run([node, '--check', str(js)], capture_output=True, text=True)
+            if result.returncode:
+                errors.append(f'JavaScript syntax error in {gs.name}:\n{result.stderr}')
+
+        for script in sorted(ROOT.joinpath('scripts').glob('*.mjs')):
+            result = subprocess.run([node, '--check', str(script)], capture_output=True, text=True)
+            if result.returncode:
+                errors.append(f'Node.js syntax error in {script.relative_to(ROOT)}:\n{result.stderr}')
+
+        html = (SRC / 'Index.html').read_text()
+        scripts = re.findall(r'<script(?:\s[^>]*)?>(.*?)</script>', html, flags=re.I | re.S)
+        check(bool(scripts), 'Index.html contains no inline script.')
+        for index, script in enumerate(scripts):
+            js = tmp_path / f'index-{index}.js'
+            js.write_text(script)
+            result = subprocess.run([node, '--check', str(js)], capture_output=True, text=True)
+            if result.returncode:
+                errors.append(f'Browser JavaScript syntax error in Index.html script {index}:\n{result.stderr}')
+
+secret_patterns = [
+    re.compile(r'ghp_[A-Za-z0-9]{20,}'),
+    re.compile(r'AIza[0-9A-Za-z_-]{20,}'),
+    re.compile(r'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----'),
+    re.compile(r'"private_key"\s*:\s*"'),
+]
+for path in ROOT.rglob('*'):
+    if not path.is_file() or any(part in {'.git', 'node_modules'} for part in path.parts):
+        continue
+    try:
+        text = path.read_text(errors='ignore')
+    except Exception:
+        continue
+    for pattern in secret_patterns:
+        if pattern.search(text):
+            errors.append(f'Possible secret in {path.relative_to(ROOT)} matching {pattern.pattern}')
+
+for profile in ROOT.joinpath('profiles').glob('appsscript.*.json'):
+    try:
+        json.loads(profile.read_text())
+    except Exception as exc:
+        errors.append(f'Invalid profile {profile.name}: {exc}')
+
+if errors:
+    print('VALIDATION FAILED')
+    for error in errors:
+        print(f'- {error}')
+    sys.exit(1)
+
+print('VALIDATION PASSED')
+print(f'- {len(list(SRC.glob("*.gs")))} server files')
+print('- manifest services and scopes verified')
+print('- server and browser JavaScript syntax verified')
+print('- private-by-default, idempotency, HTTP isolation, and resumable-upload contracts verified')
+print('- no obvious committed secrets found')
