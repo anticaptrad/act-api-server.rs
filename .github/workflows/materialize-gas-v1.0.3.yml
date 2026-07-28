@@ -4,6 +4,12 @@ on:
   push:
     branches:
       - agent/den-399-harden-gas-http-interface
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.gas-materialize/**'
+      - '.github/workflows/materialize-gas-v1.0.3.yml'
 
 permissions:
   contents: write
@@ -20,7 +26,7 @@ jobs:
       - name: Check out feature branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0
 
       - name: Install Node.js
@@ -136,4 +142,5 @@ jobs:
             .github/workflows/materialize-gas-v1.0.3.yml \
             .github/workflows/apps-script.yml
           git commit -m 'Add hardened Anticaptrad GAS v1.0.3 source package'
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          target_branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          git push origin "HEAD:${target_branch}"
