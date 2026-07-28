@@ -6,12 +6,12 @@ WORKDIR /usr/src/app
 # Pre-build dependencies against a stub main to leverage layer caching.
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir src && echo 'fn main() {}' > src/main.rs \
-    && cargo build --release \
+    && cargo build --locked --release \
     && rm -rf src
 
 # Build the real sources.
 COPY src ./src
-RUN touch src/main.rs && cargo build --release
+RUN touch src/main.rs && cargo build --locked --release
 
 FROM debian:bookworm-slim
 RUN apt-get update \
