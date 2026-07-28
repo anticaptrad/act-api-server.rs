@@ -44,7 +44,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cargo clippy --all-targets --all-features -- -D warnings 2>&1 | tee clippy.log
+          cargo clippy --locked --all-targets --all-features -- -D warnings 2>&1 | tee clippy.log
 
       - name: Preserve Clippy diagnostics on failure
         if: failure()
@@ -56,18 +56,10 @@ jobs:
           retention-days: 7
 
       - name: Test
-        run: cargo test --all-targets --all-features
+        run: cargo test --locked --all-targets --all-features
 
       - name: Build release binary
-        run: cargo build --release
-
-      - name: Preserve resolved dependency lock
-        uses: actions/upload-artifact@v4
-        with:
-          name: cargo-lock
-          path: Cargo.lock
-          if-no-files-found: error
-          retention-days: 7
+        run: cargo build --locked --release
 
   container:
     name: Container build
