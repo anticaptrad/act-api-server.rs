@@ -7,6 +7,7 @@
 
 use async_nats::Client;
 use futures::StreamExt;
+use serde_json::Value;
 
 /// Subject subscribed to for platform-wide events.
 pub const EVENT_SUBJECT: &str = "act.events.>";
@@ -44,4 +45,25 @@ pub fn spawn_event_subscriber(client: Client) {
             }
         }
     });
+}
+
+/// Publish a redacted lifecycle event without making NATS a hard dependency.
+/// Payloads passed here must never contain API keys, OAuth tokens, resumable
+/// upload URLs, Gmail content, descriptions, or other sensitive data.
+pub async fn publish_json(client: Option<&Client>, subject: &str, payload: &Value) {
+    let Some(client) = client else {
+        return;
+    };
+
+    let encoded = match serde_json::to_vec(payload) {
+        Ok(encoded) => encoded,
+        Err(error) => {
+            tracing::warn!(%subject, %error, "could not serialize NATS audit event");
+            return;
+        }
+    };
+
+    if let Err(error) = client.publish(subject.to_string(), encoded.into()).await {
+        tracing::warn!(%subject, %error, "could not publish NATS audit event");
+    }
 }

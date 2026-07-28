@@ -1,19 +1,22 @@
 //! act-api-server — HTTP API + NATS event-bus bridge for the AntiCapTrad platform.
 //!
-//! Deployed to the k8s cluster at ~/codes/ores/k8s-cluster alongside the shared
-//! NATS bridge and the OpenTelemetry collector.
+//! Deployed to the k8s cluster at `~/codes/ores/k8s-cluster` alongside the
+//! shared NATS bridge and OpenTelemetry collector.
 
+mod auth;
 mod config;
 mod nats;
 mod routes;
 mod telemetry;
+mod youtube;
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
+
 use tokio::signal;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let cfg = config::Config::from_env();
+    let cfg = config::Config::from_env()?;
     telemetry::init(&cfg.service_name)?;
 
     let nats = nats::connect(&cfg.nats_url).await;
@@ -21,7 +24,23 @@ async fn main() -> anyhow::Result<()> {
         nats::spawn_event_subscriber(client);
     }
 
-    let app = routes::router(routes::AppState { nats });
+    let youtube = cfg
+        .youtube
+        .as_ref()
+        .map(youtube::YoutubeGasClient::new)
+        .transpose()?;
+
+    tracing::info!(
+        youtube_configured = youtube.is_some(),
+        admin_auth_configured = cfg.admin_api_key.is_some(),
+        "control-plane configuration loaded"
+    );
+
+    let app = routes::router(routes::AppState {
+        nats,
+        youtube,
+        admin_api_key: cfg.admin_api_key.map(Arc::<str>::from),
+    });
 
     let addr = SocketAddr::from(([0, 0, 0, 0], cfg.port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
