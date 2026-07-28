@@ -1,0 +1,61 @@
+name: Validate Apps Script package
+
+on:
+  push:
+    branches:
+      - main
+      - 'agent/**'
+    paths:
+      - 'apps-script/**'
+      - '.github/workflows/apps-script.yml'
+  pull_request:
+    paths:
+      - 'apps-script/**'
+      - '.github/workflows/apps-script.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gas-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Reject unresolved conflict markers
+        run: |
+          if grep -RInE '^(<<<<<<<|=======|>>>>>>>)' apps-script; then
+            echo 'Unresolved Git conflict markers found.' >&2
+            exit 1
+          fi
+
+      - name: Validate Apps Script source and profiles
+        working-directory: apps-script
+        run: npm run check
+
+      - name: Build review archive
+        run: |
+          zip -qr anticaptrad-youtube-gas-v1.0.3.zip apps-script \
+            -x 'apps-script/node_modules/*'
+          sha256sum anticaptrad-youtube-gas-v1.0.3.zip \
+            > anticaptrad-youtube-gas-v1.0.3.zip.sha256
+
+      - name: Upload validated package
+        uses: actions/upload-artifact@v4
+        with:
+          name: anticaptrad-youtube-gas-v1.0.3
+          path: |
+            anticaptrad-youtube-gas-v1.0.3.zip
+            anticaptrad-youtube-gas-v1.0.3.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
