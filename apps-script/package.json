@@ -28,6 +28,7 @@
     "status": "clasp show-file-status --json",
     "deployments": "clasp list-deployments",
     "versions": "clasp list-versions",
+    "predeploy:http-api": "npm run check",
     "deploy:http-api": "node scripts/redeploy.mjs --profile http-api",
     "open": "clasp open-script",
     "profile:default": "node scripts/use-profile.mjs default",
