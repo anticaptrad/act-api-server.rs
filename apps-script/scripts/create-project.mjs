@@ -56,8 +56,9 @@ export function createProject({ root = PACKAGE_ROOT, title = 'Anticaptrad YouTub
 
 export function main() {
   const scriptId = createProject();
-  console.log(`Apps Script project created: ${scriptId}`);
-  console.log('Review the new target, then run `npm run push`.');
+  console.log(`Separate Apps Script project created: ${scriptId}`);
+  console.log('The guarded Anticaptrad preflight and push commands intentionally reject this different Script ID.');
+  console.log('Manage it from an isolated package configured for that target; do not use this channel-specific package to push it.');
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
