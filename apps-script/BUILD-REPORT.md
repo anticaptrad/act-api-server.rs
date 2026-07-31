@@ -52,10 +52,11 @@ Static validation confirms that the package, Apps Script manifest profiles, and 
 
 ## Existing-project binding fix
 
-- Pre-bound to Script ID `17WBBEktK2see20TEwXijscSIkL9Ua-Ylp-_Q9V6IGHXtYCIg_xBQE6yJ`.
+- Targets Script ID `17WBBEktK2see20TEwXijscSIkL9Ua-Ylp-_Q9V6IGHXtYCIg_xBQE6yJ`.
 - Preserves the existing project title `youtube channel anticaptrad mgmt http interface`.
-- `npm run create` now safely binds this existing project; `npm run create:new` is the explicit new-project path.
-- Added optional pre-push remote backup and file-status commands.
+- `npm run bind` explicitly binds this existing project; ambiguous `npm run create` is disabled.
+- `npm run create:new` is an isolated new-project utility whose output is intentionally rejected by the Anticaptrad guarded push workflow.
+- Added pre-push remote backup and file-status commands.
 
 ## Clasp workflow hardening in 1.1.0
 
@@ -63,4 +64,4 @@ Static validation confirms that the package, Apps Script manifest profiles, and 
 - Generates `.clasp.json` locally with restrictive permissions and deterministic `filePushOrder`; it is no longer committed.
 - Uses the pinned local clasp binary and reproducible `npm ci` installation.
 - Added versioned redeployment for the approved public HTTP deployment ID.
-- Added 12 mocked workflow tests covering failure paths as well as successful binding, backup, push, and redeployment.
+- Added 14 mocked workflow tests covering failure paths, successful binding, backup, push, redeployment, and isolation of deliberately separate projects.
