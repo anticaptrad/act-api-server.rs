@@ -36,9 +36,9 @@ A deployable Apps Script web app and JSON HTTP endpoint for the YouTube channel 
 unzip anticaptrad-youtube-gas.zip
 cd anticaptrad-youtube-gas
 ./scripts/install.sh
-npx clasp login
-npm run bind
-npm run backup:remote  # optional but recommended before the first push
+npm run login
+npm run auth:status
+npm run preflight
 npm run push
 npm run open
 ```
@@ -49,9 +49,9 @@ npm run open
 Expand-Archive .\anticaptrad-youtube-gas.zip
 cd .\anticaptrad-youtube-gas
 .\scripts\install.ps1
-npx clasp login
-npm run bind
-npm run backup:remote  # optional but recommended before the first push
+npm run login
+npm run auth:status
+npm run preflight
 npm run push
 npm run open
 ```
@@ -67,15 +67,17 @@ Then in the Apps Script editor:
 
 ### Existing Apps Script project binding
 
-This Anticaptrad package is pre-bound to the existing standalone Apps Script project:
+This Anticaptrad package targets the existing standalone Apps Script project:
 
 - Name: **youtube channel anticaptrad mgmt http interface**
 - Script ID: `17WBBEktK2see20TEwXijscSIkL9Ua-Ylp-_Q9V6IGHXtYCIg_xBQE6yJ`
 - Editor: `https://script.google.com/home/projects/17WBBEktK2see20TEwXijscSIkL9Ua-Ylp-_Q9V6IGHXtYCIg_xBQE6yJ/edit`
 
-`npm run bind` writes a verified `.clasp.json` with that Script ID and `rootDir: "src"`. It does not rename the existing Apps Script project. `npm run push` replaces the code files inside that project, so run `npm run backup:remote` first when existing remote code must be retained.
+`npm run bind` generates a verified, mode-`0600` `.clasp.json` with the approved Script ID, `rootDir: "src"`, and deterministic `filePushOrder`. The generated file is ignored by Git and is not shipped as source. Binding does not rename the Apps Script project.
 
-The earlier `Invalid container file type` run did **not** create or bind a project. In version 1.0.3, `npm run create` is intentionally an alias of `npm run bind`; use `npm run create:new` only when a separate new Apps Script project is actually desired.
+`npm run push` is guarded: it runs the full test suite, verifies the exact target/profile/file set through `clasp show-file-status --json`, clones and hashes the remote project into `backups/`, and only then invokes the required whole-project `clasp push --force`. A failed backup or preflight prevents the push. The emergency `npm run push:unsafe` command bypasses those protections and should not be used during normal operation.
+
+The earlier `Invalid container file type` run did **not** create or bind a project. `npm run create` is now intentionally disabled because the name is ambiguous. Use `npm run bind` for this existing project or `npm run create:new` only when a separate standalone Apps Script project is deliberately required.
 
 The setup action creates this Drive tree:
 
@@ -135,21 +137,23 @@ Main actions:
 - `partnerStatus`, `partnerOwners`, `partnerClaims` — partner profile only
 - `adminStatus`, `workspaceUsers` — Workspace Admin profile only
 
-To expose a server-to-server endpoint without Google sign-in:
+To update the approved server-to-server endpoint without Google sign-in:
 
 ```bash
 npm run profile:http-api
-npm run push
+npm run deploy:http-api
 ```
 
-Then redeploy with the public web-app profile. This uses `ANYONE_ANONYMOUS`; protect the generated API key, rotate it if disclosed, and do not put it in a repository, URL, browser log, or chat. The API key belongs in the JSON POST body. The profile command also disables the HTML/RPC dashboard; privileged GET actions and anonymous `google.script.run` calls are rejected.
+`deploy:http-api` performs a guarded push and updates the existing versioned deployment ID. It refuses to deploy any profile other than `http-api`. This uses `ANYONE_ANONYMOUS`; protect the generated API key, rotate it if disclosed, and do not put it in a repository, URL, browser log, or chat. The API key belongs in the JSON POST body. The profile command also disables the HTML/RPC dashboard; privileged GET actions and anonymous `google.script.run` calls are rejected.
 
-Return to the safe default:
+To return the source tree to the owner-only default:
 
 ```bash
 npm run profile:default
 npm run push
 ```
+
+Create or update the owner-only dashboard deployment separately in the Apps Script editor. Do not accidentally repoint the approved public HTTP deployment to the owner profile.
 
 ## Optional profiles
 
@@ -204,18 +208,25 @@ Create a Gmail label named `anticaptrad-video-inbox`, apply it to messages conta
 
 For normal video production, upload source media directly to Drive rather than emailing it.
 
-## Validation
+## Validation and clasp diagnostics
 
 ```bash
-npm run check
+npm run check          # static checks plus 12 mocked clasp workflow tests
+npm run preflight      # verifies target, active profile, and exact push file set
+npm run status         # raw clasp JSON file status
+npm run deployments    # list versioned deployments
+npm run versions       # list immutable script versions
 ```
 
-The validator checks the manifest, required services/scopes, server-side JavaScript syntax, browser JavaScript syntax, expected files, and accidental secret patterns.
+The workflow tests cover target binding, foreign-target refusal, profile drift, exact push-set checks, backup integrity manifests, backup failure blocking, guarded force-push ordering, explicit backup bypass, project-creation rollback, and deployment-ID/profile pinning.
 
 ## Security notes
 
-- `.clasprc.json` is an OAuth credential and must never be shared or committed. `.clasp.json` contains only the target Script ID/root directory; it is included in this delivery for the specified Anticaptrad project but remains gitignored.
+- `.clasprc.json` is an OAuth credential and must never be shared or committed. `.clasp.json` is generated locally by `npm run bind`, kept mode `0600`, and ignored by Git to reduce accidental cross-project pushes.
 - Never commit OAuth tokens, Google service-account keys, API keys, or Content Owner credentials.
 - The web app executes as the deployer, so its deployment access setting is a security boundary.
 - Do not use the Partner profile unless the account is actually authorized.
 - Destructive video deletion is intentionally not implemented.
+- `clasp push` replaces the entire remote project and is not atomic per file; use the guarded workflow rather than invoking force push directly.
+
+See [CLASP-WORKFLOW.md](CLASP-WORKFLOW.md) for the operational contract and recovery steps.
