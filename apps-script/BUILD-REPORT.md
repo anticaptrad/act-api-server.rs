@@ -56,3 +56,11 @@ Static validation confirms that the package, Apps Script manifest profiles, and 
 - Preserves the existing project title `youtube channel anticaptrad mgmt http interface`.
 - `npm run create` now safely binds this existing project; `npm run create:new` is the explicit new-project path.
 - Added optional pre-push remote backup and file-status commands.
+
+## Clasp workflow hardening in 1.1.0
+
+- Replaced unconditional force push with target/profile/file-set preflight, hashed remote backup, guarded force push, and local receipts.
+- Generates `.clasp.json` locally with restrictive permissions and deterministic `filePushOrder`; it is no longer committed.
+- Uses the pinned local clasp binary and reproducible `npm ci` installation.
+- Added versioned redeployment for the approved public HTTP deployment ID.
+- Added 12 mocked workflow tests covering failure paths as well as successful binding, backup, push, and redeployment.
