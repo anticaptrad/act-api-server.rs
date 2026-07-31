@@ -77,7 +77,7 @@ This Anticaptrad package targets the existing standalone Apps Script project:
 
 `npm run push` is guarded: it runs the full test suite, verifies the exact target/profile/file set through `clasp show-file-status --json`, clones and hashes the remote project into `backups/`, and only then invokes the required whole-project `clasp push --force`. A failed backup or preflight prevents the push. The emergency `npm run push:unsafe` command bypasses those protections and should not be used during normal operation.
 
-The earlier `Invalid container file type` run did **not** create or bind a project. `npm run create` is now intentionally disabled because the name is ambiguous. Use `npm run bind` for this existing project or `npm run create:new` only when a separate standalone Apps Script project is deliberately required.
+The earlier `Invalid container file type` run did **not** create or bind a project. `npm run create` is now intentionally disabled because the name is ambiguous. Use `npm run bind` for this existing project or `npm run create:new` only when a separate standalone Apps Script project is deliberately required. A separately created Script ID is intentionally rejected by this package's Anticaptrad preflight and push commands and must be managed from an isolated package configured for that target.
 
 The setup action creates this Drive tree:
 
@@ -211,14 +211,14 @@ For normal video production, upload source media directly to Drive rather than e
 ## Validation and clasp diagnostics
 
 ```bash
-npm run check          # static checks plus 12 mocked clasp workflow tests
+npm run check          # static checks plus 14 mocked clasp workflow tests
 npm run preflight      # verifies target, active profile, and exact push file set
 npm run status         # raw clasp JSON file status
 npm run deployments    # list versioned deployments
 npm run versions       # list immutable script versions
 ```
 
-The workflow tests cover target binding, foreign-target refusal, profile drift, exact push-set checks, backup integrity manifests, backup failure blocking, guarded force-push ordering, explicit backup bypass, project-creation rollback, and deployment-ID/profile pinning.
+The workflow tests cover target binding, foreign-target refusal, profile drift, exact push-set checks, backup integrity manifests, backup failure blocking, guarded force-push ordering, explicit backup bypass, project-creation rollback and isolation, and deployment-ID/profile pinning.
 
 ## Security notes
 
