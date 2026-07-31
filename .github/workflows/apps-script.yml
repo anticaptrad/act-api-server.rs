@@ -40,7 +40,7 @@ jobs:
 
       - name: Reject unresolved conflict markers
         run: |
-          if grep -RInE '^(<<<<<<<|=======|>>>>>>>)' apps-script; then
+          if grep -RInE '^(<<<<<<<|=======|>>>>>>>)' --exclude-dir=node_modules apps-script; then
             echo 'Unresolved Git conflict markers found.' >&2
             exit 1
           fi
