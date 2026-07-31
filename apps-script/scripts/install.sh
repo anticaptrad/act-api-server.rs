@@ -12,19 +12,22 @@ if (( node_major < 22 )); then
   exit 1
 fi
 
-npm install
+npm ci
 npm run check
+npm run bind
 
 echo
 cat <<'STEPS'
 1. Enable the Apps Script API at https://script.google.com/home/usersettings
-2. Run: npx clasp login
-3. Run: npm run bind
-4. Optional safety copy: npm run backup:remote
-5. Run: npm run push
+2. Run: npm run login
+3. Confirm the account: npm run auth:status
+4. Validate the exact target/profile/push set: npm run preflight
+5. Run the guarded push: npm run push
+   - This creates a hashed remote backup before clasp replaces project content.
 6. Run: npm run open
-7. In Apps Script: Deploy > New deployment > Web app
-   - Execute as: Me
-   - Who has access: Only myself
-8. Open the web app and click “First-run setup”.
+7. For the owner dashboard, create/update an owner-only web-app deployment in the Apps Script editor.
+8. For the public keyed HTTP deployment:
+   npm run profile:http-api
+   npm run deploy:http-api
+9. Open the app and complete First-run setup with the owning Google account.
 STEPS
