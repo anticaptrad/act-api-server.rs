@@ -70,7 +70,13 @@ if (args[0] === 'create-script') {
   writeFileSync(resolve(process.cwd(), '.clasp.json'), JSON.stringify({ scriptId: 'NEW_SCRIPT_ID', rootDir }, null, 2));
   process.exit(0);
 }
-if (args[0] === 'push' || args[0] === 'create-deployment') process.exit(0);
+if (args[0] === 'create-deployment') {
+  const deploymentId = process.env.FAKE_DEPLOYMENT_ID || args[args.indexOf('--deploymentId') + 1];
+  const description = args[args.indexOf('--description') + 1];
+  console.log(JSON.stringify({ deploymentId, versionNumber: 42, description }, null, 2));
+  process.exit(0);
+}
+if (args[0] === 'push') process.exit(0);
 console.error('unsupported fake clasp command', args);
 process.exit(9);
 `);
@@ -79,24 +85,25 @@ process.exit(9);
 }
 
 function withFakeClasp(root, fn) {
-  const previousBin = process.env.CLASP_BIN;
-  const previousLog = process.env.FAKE_CLASP_LOG;
-  const previousStatus = process.env.FAKE_STATUS_JSON;
-  const previousFailClone = process.env.FAKE_FAIL_CLONE;
-  const previousFailCreate = process.env.FAKE_FAIL_CREATE;
+  const names = [
+    'CLASP_BIN',
+    'FAKE_CLASP_LOG',
+    'FAKE_STATUS_JSON',
+    'FAKE_FAIL_CLONE',
+    'FAKE_FAIL_CREATE',
+    'FAKE_DEPLOYMENT_ID',
+  ];
+  const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
   const log = resolve(root, 'clasp.log');
   process.env.CLASP_BIN = installFakeClasp(root);
   process.env.FAKE_CLASP_LOG = log;
-  delete process.env.FAKE_STATUS_JSON;
-  delete process.env.FAKE_FAIL_CLONE;
-  delete process.env.FAKE_FAIL_CREATE;
+  for (const name of names.slice(2)) delete process.env[name];
   try { return fn(log); }
   finally {
-    if (previousBin === undefined) delete process.env.CLASP_BIN; else process.env.CLASP_BIN = previousBin;
-    if (previousLog === undefined) delete process.env.FAKE_CLASP_LOG; else process.env.FAKE_CLASP_LOG = previousLog;
-    if (previousStatus === undefined) delete process.env.FAKE_STATUS_JSON; else process.env.FAKE_STATUS_JSON = previousStatus;
-    if (previousFailClone === undefined) delete process.env.FAKE_FAIL_CLONE; else process.env.FAKE_FAIL_CLONE = previousFailClone;
-    if (previousFailCreate === undefined) delete process.env.FAKE_FAIL_CREATE; else process.env.FAKE_FAIL_CREATE = previousFailCreate;
+    for (const name of names) {
+      if (previous[name] === undefined) delete process.env[name];
+      else process.env[name] = previous[name];
+    }
   }
 }
 
@@ -199,7 +206,7 @@ test('create:new refuses an existing binding and restores the desired manifest',
   });
 });
 
-test('redeploy only automates the approved public HTTP deployment', () => {
+test('redeploy only automates the approved public HTTP deployment and records its immutable version', () => {
   const root = fixture();
   bindProject({ root });
   withFakeClasp(root, (log) => {
@@ -207,8 +214,24 @@ test('redeploy only automates the approved public HTTP deployment', () => {
     applyProfile('http-api', { root });
     const result = redeploy({ root, profile: 'http-api', description: 'test deployment' });
     assert.equal(result.receipt.deploymentId, PROJECT_TARGET.deploymentId);
+    assert.equal(result.receipt.versionNumber, 42);
     const deployment = logEntries(log).find((entry) => entry.args[0] === 'create-deployment');
     assert.ok(deployment.args.includes(PROJECT_TARGET.deploymentId));
+    assert.ok(deployment.args.includes('--json'));
+  });
+});
+
+test('redeploy rejects an unexpected deployment ID returned by clasp', () => {
+  const root = fixture();
+  bindProject({ root });
+  applyProfile('http-api', { root });
+  withFakeClasp(root, () => {
+    process.env.FAKE_DEPLOYMENT_ID = 'WRONG_DEPLOYMENT';
+    assert.throws(
+      () => redeploy({ root, profile: 'http-api', description: 'mismatch test' }),
+      /unexpected deployment/,
+    );
+    assert.equal(existsSync(resolve(root, '.clasp-last-deployment.json')), false);
   });
 });
 
