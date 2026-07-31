@@ -1,19 +1,41 @@
-import { mkdirSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync } from 'node:fs';
+import { relative, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
-const SCRIPT_ID = '17WBBEktK2see20TEwXijscSIkL9Ua-Ylp-_Q9V6IGHXtYCIg_xBQE6yJ';
-const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-const backupDir = resolve('backups', `remote-before-push-${stamp}`);
-mkdirSync(backupDir, { recursive: true });
+import { hashTree, PACKAGE_ROOT, runClasp, writeJsonAtomic } from './lib/clasp.mjs';
+import { PROJECT_TARGET } from './project-target.mjs';
 
-const command = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-const result = spawnSync(command, [
-  'clasp', 'clone-script', SCRIPT_ID, '--rootDir', 'src'
-], { cwd: backupDir, stdio: 'inherit' });
-
-if ((result.status ?? 1) !== 0) {
-  console.error('Remote backup failed; no push was performed by this command.');
-  process.exit(result.status ?? 1);
+export function createRemoteBackup({ root = PACKAGE_ROOT, outputDir } = {}) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupDir = resolve(root, outputDir || `backups/remote-before-push-${stamp}`);
+  if (existsSync(backupDir)) throw new Error(`Backup destination already exists: ${backupDir}`);
+  mkdirSync(backupDir, { recursive: true });
+  runClasp([
+    'clone-script', PROJECT_TARGET.scriptId, '--rootDir', PROJECT_TARGET.rootDir,
+  ], { root, cwd: backupDir });
+  const version = runClasp(['--version'], { root, capture: true }).stdout.trim();
+  const manifest = {
+    schemaVersion: 1,
+    createdAt: new Date().toISOString(),
+    scriptId: PROJECT_TARGET.scriptId,
+    rootDir: PROJECT_TARGET.rootDir,
+    claspVersion: version,
+    files: hashTree(backupDir),
+  };
+  writeJsonAtomic(resolve(backupDir, 'backup-manifest.json'), manifest, 0o600);
+  return { backupDir, manifest };
 }
-console.log(`Remote project backup saved to ${backupDir}`);
+
+export function main(argv = process.argv.slice(2)) {
+  const index = argv.indexOf('--output-dir');
+  const outputDir = index >= 0 ? argv[index + 1] : undefined;
+  if (index >= 0 && !outputDir) throw new Error('--output-dir requires a path.');
+  if (argv.length !== (index >= 0 ? 2 : 0)) throw new Error('Usage: backup-remote.mjs [--output-dir path]');
+  const result = createRemoteBackup({ outputDir });
+  console.log(`Remote project backup saved to ${relative(PACKAGE_ROOT, result.backupDir)}`);
+  console.log(`Backup manifest contains ${result.manifest.files.length} hashed files.`);
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
+  try { main(); } catch (error) { console.error(error.message); process.exit(1); }
+}
