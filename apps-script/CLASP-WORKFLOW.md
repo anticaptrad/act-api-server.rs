@@ -49,7 +49,7 @@ It records `.clasp-last-deployment.json`. The file is local operational evidence
 
 - `npm run push:unsafe` invokes raw `clasp push --force`. It exists for recovery only.
 - `node scripts/push-safe.mjs --skip-backup --acknowledge-no-backup` bypasses backup with an explicit acknowledgement.
-- `npm run create:new` creates a separate standalone project and refuses to run while `.clasp.json` exists.
+- `npm run create:new` creates a separate standalone project and refuses to run while `.clasp.json` exists. The resulting different Script ID is intentionally rejected by this package's guarded preflight and push commands; manage it from an isolated package configured for that target.
 - `clasp pull` is intentionally not wrapped because it mutates local source. Use `npm run backup:remote` for inspection and recovery instead.
 
 ## Authentication
