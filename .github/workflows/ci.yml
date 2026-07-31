@@ -96,6 +96,7 @@ jobs:
           printf '%s\n' "$response" | jq -e '
             .ok == true and
             .data.app == "Anticaptrad YouTube Control Center" and
-            .data.version == "1.0.0" and
-            (.data.timestamp | type == "string")
+            (.data.version | type == "string" and test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) and
+            (.data.timestamp | type == "string" and length > 0)
           '
+          printf 'Live GAS health version: %s\n' "$(printf '%s\n' "$response" | jq -r '.data.version')"

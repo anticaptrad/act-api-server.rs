@@ -1,4 +1,5 @@
+# Patterns are relative to rootDir (src/).
 **/**
+!appsscript.json
 !**/*.gs
 !**/*.html
-!appsscript.json

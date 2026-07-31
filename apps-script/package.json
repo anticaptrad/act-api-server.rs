@@ -1,28 +1,41 @@
 {
   "name": "anticaptrad-youtube-gas",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "private": true,
   "description": "Google Apps Script web app for managing the Anticaptrad YouTube channel.",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "check": "npm run check:core && npm run check:profiles && npm run check:http-security",
+    "test": "node --test tests/*.test.mjs",
+    "check": "npm run check:core && npm run check:profiles && npm run check:http-security && npm test",
     "check:core": "python3 tests/validate_project.py",
     "check:profiles": "python3 tests/validate_profiles.py",
+    "check:http-security": "python3 tests/validate_http_security.py",
+    "clasp:version": "clasp --version",
+    "login": "clasp login",
+    "login:no-localhost": "clasp login --no-localhost",
+    "logout": "clasp logout",
+    "auth:status": "clasp show-authorized-user --json",
     "bind": "node scripts/bind-project.mjs",
-    "create": "node scripts/bind-project.mjs",
+    "create": "node scripts/refuse-create-alias.mjs",
     "create:new": "node scripts/create-project.mjs",
     "backup:remote": "node scripts/backup-remote.mjs",
-    "push": "clasp push --force",
-    "status": "clasp show-file-status",
+    "preflight": "node scripts/preflight-clasp.mjs",
+    "prepush": "npm run check",
+    "push": "node scripts/push-safe.mjs",
+    "push:unsafe": "clasp push --force",
+    "status": "clasp show-file-status --json",
+    "deployments": "clasp list-deployments",
+    "versions": "clasp list-versions",
+    "predeploy:http-api": "npm run check",
+    "deploy:http-api": "node scripts/redeploy.mjs --profile http-api",
     "open": "clasp open-script",
     "profile:default": "node scripts/use-profile.mjs default",
     "profile:monetization": "node scripts/use-profile.mjs monetization",
     "profile:partner": "node scripts/use-profile.mjs partner",
     "profile:workspace-admin": "node scripts/use-profile.mjs workspace-admin",
-    "profile:http-api": "node scripts/use-profile.mjs http-api",
-    "check:http-security": "python3 tests/validate_http_security.py"
+    "profile:http-api": "node scripts/use-profile.mjs http-api"
   },
   "devDependencies": {
     "@google/clasp": "3.3.0"

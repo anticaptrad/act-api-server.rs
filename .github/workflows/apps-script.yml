@@ -31,31 +31,41 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: npm
+          cache-dependency-path: apps-script/package-lock.json
+
+      - name: Install pinned clasp dependencies
+        working-directory: apps-script
+        run: npm ci --ignore-scripts
 
       - name: Reject unresolved conflict markers
         run: |
-          if grep -RInE '^(<<<<<<<|=======|>>>>>>>)' apps-script; then
+          if grep -RInE '^(<<<<<<<|=======|>>>>>>>)' --exclude-dir=node_modules apps-script; then
             echo 'Unresolved Git conflict markers found.' >&2
             exit 1
           fi
 
-      - name: Validate Apps Script source and profiles
+      - name: Validate Apps Script source, profiles, and clasp workflow
         working-directory: apps-script
         run: npm run check
 
       - name: Build review archive
+        shell: bash
         run: |
-          zip -qr anticaptrad-youtube-gas-v1.0.3.zip apps-script \
+          set -euo pipefail
+          version="$(node -p "require('./apps-script/package.json').version")"
+          archive="anticaptrad-youtube-gas-v${version}.zip"
+          zip -qr "${archive}" apps-script \
             -x 'apps-script/node_modules/*'
-          sha256sum anticaptrad-youtube-gas-v1.0.3.zip \
-            > anticaptrad-youtube-gas-v1.0.3.zip.sha256
+          sha256sum "${archive}" > "${archive}.sha256"
+          printf 'ARCHIVE=%s\n' "${archive}" >> "${GITHUB_ENV}"
 
       - name: Upload validated package
         uses: actions/upload-artifact@v4
         with:
-          name: anticaptrad-youtube-gas-v1.0.3
+          name: anticaptrad-youtube-gas-v1.1.0
           path: |
-            anticaptrad-youtube-gas-v1.0.3.zip
-            anticaptrad-youtube-gas-v1.0.3.zip.sha256
+            ${{ env.ARCHIVE }}
+            ${{ env.ARCHIVE }}.sha256
           if-no-files-found: error
           retention-days: 14
