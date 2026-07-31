@@ -1,0 +1,235 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { bindProject } from '../scripts/bind-project.mjs';
+import { createRemoteBackup } from '../scripts/backup-remote.mjs';
+import { createProject } from '../scripts/create-project.mjs';
+import { readJson, runPreflight } from '../scripts/lib/clasp.mjs';
+import { expectedClaspConfig, PROJECT_TARGET } from '../scripts/project-target.mjs';
+import { safePush } from '../scripts/push-safe.mjs';
+import { redeploy } from '../scripts/redeploy.mjs';
+import { applyProfile } from '../scripts/use-profile.mjs';
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+function fixture() {
+  const root = mkdtempSync(resolve(tmpdir(), 'anticaptrad-clasp-test-'));
+  cpSync(resolve(REPO_ROOT, 'src'), resolve(root, 'src'), { recursive: true });
+  cpSync(resolve(REPO_ROOT, 'profiles'), resolve(root, 'profiles'), { recursive: true });
+  cpSync(resolve(REPO_ROOT, '.claspignore'), resolve(root, '.claspignore'));
+  return root;
+}
+
+function installFakeClasp(root) {
+  const bin = resolve(root, 'fake-clasp.mjs');
+  writeFileSync(bin, `#!/usr/bin/env node
+import { appendFileSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { relative, resolve } from 'node:path';
+const args = process.argv.slice(2);
+if (process.env.FAKE_CLASP_LOG) appendFileSync(process.env.FAKE_CLASP_LOG, JSON.stringify({ cwd: process.cwd(), args }) + '\\n');
+if (args[0] === '--version') { console.log('3.3.0'); process.exit(0); }
+if (args[0] === 'show-file-status') {
+  if (process.env.FAKE_STATUS_JSON) { console.log(process.env.FAKE_STATUS_JSON); process.exit(0); }
+  const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = resolve(dir, entry.name);
+    return entry.isDirectory() ? walk(path) : [path];
+  });
+  const source = resolve(process.cwd(), 'src');
+  const filesToPush = walk(source).filter((path) => /(?:\\.gs|\\.html|appsscript\\.json)$/.test(path))
+    .map((path) => 'src/' + relative(source, path).replaceAll('\\\\', '/')).sort();
+  console.log(JSON.stringify({ filesToPush, untrackedFiles: ['.clasp.json'] }));
+  process.exit(0);
+}
+if (args[0] === 'clone-script') {
+  if (process.env.FAKE_FAIL_CLONE === '1') process.exit(7);
+  const rootDir = args[args.indexOf('--rootDir') + 1];
+  mkdirSync(resolve(process.cwd(), rootDir), { recursive: true });
+  writeFileSync(resolve(process.cwd(), rootDir, 'Code.gs'), 'function remoteBackup() {}\\n');
+  writeFileSync(resolve(process.cwd(), rootDir, 'appsscript.json'), '{"runtimeVersion":"V8"}\\n');
+  writeFileSync(resolve(process.cwd(), '.clasp.json'), JSON.stringify({ scriptId: args[1], rootDir }, null, 2));
+  process.exit(0);
+}
+if (args[0] === 'create-script') {
+  if (process.env.FAKE_FAIL_CREATE === '1') process.exit(8);
+  const rootDir = args[args.indexOf('--rootDir') + 1];
+  mkdirSync(resolve(process.cwd(), rootDir), { recursive: true });
+  writeFileSync(resolve(process.cwd(), rootDir, 'appsscript.json'), '{"timeZone":"Etc/UTC"}\\n');
+  writeFileSync(resolve(process.cwd(), '.clasp.json'), JSON.stringify({ scriptId: 'NEW_SCRIPT_ID', rootDir }, null, 2));
+  process.exit(0);
+}
+if (args[0] === 'push' || args[0] === 'create-deployment') process.exit(0);
+console.error('unsupported fake clasp command', args);
+process.exit(9);
+`);
+  chmodSync(bin, 0o755);
+  return bin;
+}
+
+function withFakeClasp(root, fn) {
+  const previousBin = process.env.CLASP_BIN;
+  const previousLog = process.env.FAKE_CLASP_LOG;
+  const previousStatus = process.env.FAKE_STATUS_JSON;
+  const previousFailClone = process.env.FAKE_FAIL_CLONE;
+  const previousFailCreate = process.env.FAKE_FAIL_CREATE;
+  const log = resolve(root, 'clasp.log');
+  process.env.CLASP_BIN = installFakeClasp(root);
+  process.env.FAKE_CLASP_LOG = log;
+  delete process.env.FAKE_STATUS_JSON;
+  delete process.env.FAKE_FAIL_CLONE;
+  delete process.env.FAKE_FAIL_CREATE;
+  try { return fn(log); }
+  finally {
+    if (previousBin === undefined) delete process.env.CLASP_BIN; else process.env.CLASP_BIN = previousBin;
+    if (previousLog === undefined) delete process.env.FAKE_CLASP_LOG; else process.env.FAKE_CLASP_LOG = previousLog;
+    if (previousStatus === undefined) delete process.env.FAKE_STATUS_JSON; else process.env.FAKE_STATUS_JSON = previousStatus;
+    if (previousFailClone === undefined) delete process.env.FAKE_FAIL_CLONE; else process.env.FAKE_FAIL_CLONE = previousFailClone;
+    if (previousFailCreate === undefined) delete process.env.FAKE_FAIL_CREATE; else process.env.FAKE_FAIL_CREATE = previousFailCreate;
+  }
+}
+
+function logEntries(log) {
+  if (!existsSync(log)) return [];
+  return readFileSync(log, 'utf8').trim().split(/\r?\n/).filter(Boolean).map(JSON.parse);
+}
+
+test('bind writes the exact approved target with restrictive permissions', () => {
+  const root = fixture();
+  const path = bindProject({ root });
+  assert.deepEqual(readJson(path), expectedClaspConfig());
+  assert.equal(statSync(path).mode & 0o777, 0o600);
+});
+
+test('bind refuses a different target unless force is explicit', () => {
+  const root = fixture();
+  writeFileSync(resolve(root, '.clasp.json'), JSON.stringify({ scriptId: 'WRONG', rootDir: 'src' }));
+  assert.throws(() => bindProject({ root }), /Refusing to replace/);
+  bindProject({ root, force: true });
+  assert.equal(readJson(resolve(root, '.clasp.json')).scriptId, PROJECT_TARGET.scriptId);
+});
+
+test('profile application is fail-closed and does not touch the manifest when the marker is missing', () => {
+  const root = fixture();
+  const manifest = resolve(root, 'src/appsscript.json');
+  const before = readFileSync(manifest, 'utf8');
+  writeFileSync(resolve(root, 'src/00_Config.gs'), 'const OTHER = true;\n');
+  assert.throws(() => applyProfile('http-api', { root }), /exactly one DEPLOYMENT_PROFILE/);
+  assert.equal(readFileSync(manifest, 'utf8'), before);
+});
+
+test('preflight verifies profile consistency and the exact clasp push set', () => {
+  const root = fixture();
+  bindProject({ root });
+  applyProfile('http-api', { root });
+  withFakeClasp(root, () => {
+    const result = runPreflight({ root, requiredProfile: 'http-api' });
+    assert.equal(result.profile.publicHttp, true);
+    assert.ok(result.expectedFiles.includes('appsscript.json'));
+    assert.ok(result.expectedFiles.includes('00_Config.gs'));
+  });
+});
+
+test('preflight rejects an unexpected or incomplete push set', () => {
+  const root = fixture();
+  bindProject({ root });
+  withFakeClasp(root, () => {
+    process.env.FAKE_STATUS_JSON = JSON.stringify({ filesToPush: ['src/appsscript.json'], untrackedFiles: [] });
+    assert.throws(() => runPreflight({ root }), /push set does not match/);
+  });
+});
+
+test('remote backup records clasp version and SHA-256 integrity metadata', () => {
+  const root = fixture();
+  withFakeClasp(root, () => {
+    const result = createRemoteBackup({ root, outputDir: 'backups/test-backup' });
+    const manifest = readJson(resolve(result.backupDir, 'backup-manifest.json'));
+    assert.equal(manifest.claspVersion, '3.3.0');
+    assert.equal(manifest.scriptId, PROJECT_TARGET.scriptId);
+    assert.ok(manifest.files.some((entry) => entry.path === 'src/Code.gs' && entry.sha256.length === 64));
+  });
+});
+
+test('safe push requires a backup by default and records a receipt', () => {
+  const root = fixture();
+  bindProject({ root });
+  withFakeClasp(root, (log) => {
+    const result = safePush({ root });
+    assert.ok(result.backup);
+    assert.ok(existsSync(resolve(root, '.clasp-last-push.json')));
+    const commands = logEntries(log).map((entry) => entry.args[0]);
+    assert.ok(commands.indexOf('clone-script') < commands.indexOf('push'));
+    assert.deepEqual(logEntries(log).find((entry) => entry.args[0] === 'push').args, ['push', '--force']);
+  });
+});
+
+test('skipping a backup requires an explicit acknowledgement', () => {
+  const root = fixture();
+  bindProject({ root });
+  withFakeClasp(root, () => {
+    assert.throws(() => safePush({ root, skipBackup: true }), /requires --acknowledge-no-backup/);
+    const result = safePush({ root, skipBackup: true, acknowledgeNoBackup: true });
+    assert.equal(result.backup, null);
+  });
+});
+
+test('create:new refuses an existing binding and restores the desired manifest', () => {
+  const root = fixture();
+  bindProject({ root });
+  assert.throws(() => createProject({ root }), /refuses to run/);
+  const before = readFileSync(resolve(root, 'src/appsscript.json'), 'utf8');
+  writeFileSync(resolve(root, '.clasp.json'), '');
+  assert.throws(() => createProject({ root }), /refuses to run/);
+  const fresh = fixture();
+  withFakeClasp(fresh, () => {
+    const scriptId = createProject({ root: fresh });
+    assert.equal(scriptId, 'NEW_SCRIPT_ID');
+    assert.equal(readFileSync(resolve(fresh, 'src/appsscript.json'), 'utf8'), before);
+  });
+});
+
+test('redeploy only automates the approved public HTTP deployment', () => {
+  const root = fixture();
+  bindProject({ root });
+  withFakeClasp(root, (log) => {
+    assert.throws(() => redeploy({ root, profile: 'default' }), /http-api|Active profile/);
+    applyProfile('http-api', { root });
+    const result = redeploy({ root, profile: 'http-api', description: 'test deployment' });
+    assert.equal(result.receipt.deploymentId, PROJECT_TARGET.deploymentId);
+    const deployment = logEntries(log).find((entry) => entry.args[0] === 'create-deployment');
+    assert.ok(deployment.args.includes(PROJECT_TARGET.deploymentId));
+  });
+});
+
+test('a failed backup blocks push before any remote overwrite', () => {
+  const root = fixture();
+  bindProject({ root });
+  withFakeClasp(root, (log) => {
+    process.env.FAKE_FAIL_CLONE = '1';
+    assert.throws(() => safePush({ root }), /clone-script .* failed/);
+    assert.equal(logEntries(log).some((entry) => entry.args[0] === 'push'), false);
+  });
+});
+
+test('create:new restores the desired manifest when clasp creation fails', () => {
+  const root = fixture();
+  const manifest = resolve(root, 'src/appsscript.json');
+  const before = readFileSync(manifest, 'utf8');
+  withFakeClasp(root, () => {
+    process.env.FAKE_FAIL_CREATE = '1';
+    assert.throws(() => createProject({ root }), /creation failed/);
+    assert.equal(readFileSync(manifest, 'utf8'), before);
+    assert.equal(existsSync(resolve(root, '.clasp.json')), false);
+  });
+});
