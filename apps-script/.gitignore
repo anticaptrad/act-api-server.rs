@@ -1,5 +1,7 @@
 node_modules/
 .clasp.json
 .clasprc.json
+.clasp-last-*.json
+backups/
 *.zip
 .DS_Store
