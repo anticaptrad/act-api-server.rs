@@ -64,4 +64,5 @@ Static validation confirms that the package, Apps Script manifest profiles, and 
 - Generates `.clasp.json` locally with restrictive permissions and deterministic `filePushOrder`; it is no longer committed.
 - Uses the pinned local clasp binary and reproducible `npm ci` installation.
 - Added versioned redeployment for the approved public HTTP deployment ID.
-- Added 14 mocked workflow tests covering failure paths, successful binding, backup, push, redeployment, and isolation of deliberately separate projects.
+- Guarded `npm run open` and the push preflight so a missing `.clasp.json` reports the remedy (`npm run bind`) instead of raw clasp "Project settings not found." / "Script ID not set" errors.
+- Added 17 mocked workflow tests covering failure paths, successful binding, backup, push, open, redeployment, and isolation of deliberately separate projects.

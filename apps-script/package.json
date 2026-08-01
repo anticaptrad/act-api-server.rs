@@ -30,7 +30,7 @@
     "versions": "clasp list-versions",
     "predeploy:http-api": "npm run check",
     "deploy:http-api": "node scripts/redeploy.mjs --profile http-api",
-    "open": "clasp open-script",
+    "open": "node scripts/open-project.mjs",
     "profile:default": "node scripts/use-profile.mjs default",
     "profile:monetization": "node scripts/use-profile.mjs monetization",
     "profile:partner": "node scripts/use-profile.mjs partner",
