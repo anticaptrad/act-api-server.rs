@@ -18,6 +18,7 @@ import { bindProject } from '../scripts/bind-project.mjs';
 import { createRemoteBackup } from '../scripts/backup-remote.mjs';
 import { createProject } from '../scripts/create-project.mjs';
 import { readJson, runPreflight } from '../scripts/lib/clasp.mjs';
+import { openProject } from '../scripts/open-project.mjs';
 import { expectedClaspConfig, PROJECT_TARGET } from '../scripts/project-target.mjs';
 import { safePush } from '../scripts/push-safe.mjs';
 import { redeploy } from '../scripts/redeploy.mjs';
@@ -77,6 +78,7 @@ if (args[0] === 'create-deployment') {
   process.exit(0);
 }
 if (args[0] === 'push') process.exit(0);
+if (args[0] === 'open-script') process.exit(0);
 console.error('unsupported fake clasp command', args);
 process.exit(9);
 `);
@@ -242,6 +244,34 @@ test('a failed backup blocks push before any remote overwrite', () => {
     process.env.FAKE_FAIL_CLONE = '1';
     assert.throws(() => safePush({ root }), /clone-script .* failed/);
     assert.equal(logEntries(log).some((entry) => entry.args[0] === 'push'), false);
+  });
+});
+
+test('push preflight explains the bind remedy when .clasp.json is absent', () => {
+  const root = fixture();
+  withFakeClasp(root, () => {
+    assert.throws(() => runPreflight({ root }), /\.clasp\.json is missing[\s\S]*npm run bind/);
+  });
+});
+
+test('open explains the bind remedy when .clasp.json is absent', () => {
+  const root = fixture();
+  withFakeClasp(root, (log) => {
+    assert.throws(() => openProject({ root }), /\.clasp\.json is missing[\s\S]*npm run bind/);
+    assert.equal(logEntries(log).length, 0);
+  });
+});
+
+test('open verifies the approved binding before invoking clasp open-script', () => {
+  const root = fixture();
+  bindProject({ root });
+  withFakeClasp(root, (log) => {
+    assert.equal(openProject({ root }), PROJECT_TARGET.scriptId);
+    assert.deepEqual(logEntries(log).at(-1).args, ['open-script']);
+  });
+  writeFileSync(resolve(root, '.clasp.json'), JSON.stringify({ scriptId: 'WRONG', rootDir: 'src' }));
+  withFakeClasp(root, () => {
+    assert.throws(() => openProject({ root }), /does not match the approved Anticaptrad target/);
   });
 });
 

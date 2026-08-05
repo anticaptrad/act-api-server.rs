@@ -45,6 +45,14 @@ export function readJson(path, label = path) {
 
 export function assertClaspTarget({ root = PACKAGE_ROOT } = {}) {
   const configPath = resolve(root, '.clasp.json');
+  if (!existsSync(configPath)) {
+    throw new Error(
+      '.clasp.json is missing, so clasp has no Script ID ' +
+      '(raw clasp reports "Project settings not found." or "Script ID not set").\n' +
+      'Run `npm run bind` to bind this package to the approved Anticaptrad project, ' +
+      'or manage a deliberately separate `npm run create:new` project from its own isolated package.',
+    );
+  }
   const actual = readJson(configPath, '.clasp.json');
   const expected = expectedClaspConfig();
   if (JSON.stringify(stableJson(actual)) !== JSON.stringify(stableJson(expected))) {
