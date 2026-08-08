@@ -110,8 +110,7 @@ impl State {
                     show_force_hint: false,
                 },
                 Trigger::StdinEof
-                    if self.stdin_is_tty
-                        && matches!(self.first_trigger, Some(Trigger::Sigint)) =>
+                    if self.stdin_is_tty && matches!(self.first_trigger, Some(Trigger::Sigint)) =>
                 {
                     Transition {
                         state: Self {
@@ -387,7 +386,7 @@ struct Signals {
 #[cfg(unix)]
 impl Signals {
     fn new() -> io::Result<Self> {
-        use signal::unix::{signal, SignalKind};
+        use signal::unix::{SignalKind, signal};
 
         Ok(Self {
             sigint: signal(SignalKind::interrupt())?,
