@@ -49,7 +49,7 @@ async fn serve(cfg: config::Config) -> anyhow::Result<()> {
     tracing::info!(%local_address, service = %cfg.service_name, "act-api-server listening");
 
     let server_control = axum_server::Handle::new();
-    let server = axum_server::from_tcp(listener)?
+    let server = axum_server::from_tcp(listener)
         .handle(server_control.clone())
         .serve(app.into_make_service());
     let server_handle = tokio::spawn(server);

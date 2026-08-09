@@ -482,7 +482,7 @@ struct Signals {
 #[cfg(unix)]
 impl Signals {
     fn new() -> io::Result<Self> {
-        use signal::unix::{signal, SignalKind};
+        use signal::unix::{SignalKind, signal};
 
         Ok(Self {
             sigint: signal(SignalKind::interrupt())?,
@@ -521,7 +521,7 @@ impl Signals {
 mod tests {
     use std::{net::TcpListener, sync::Arc};
 
-    use axum::{routing::get, Router};
+    use axum::{Router, routing::get};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpStream,
@@ -569,7 +569,6 @@ mod tests {
         let address = listener.local_addr().expect("test listener address");
         let control = Handle::new();
         let server = axum_server::from_tcp(listener)
-            .expect("create test server")
             .handle(control.clone())
             .serve(app.into_make_service());
         let server_handle = tokio::spawn(server);
@@ -654,9 +653,7 @@ mod tests {
             trigger_rx,
         ));
 
-        trigger_tx
-            .send(Ok(Trigger::Sigterm))
-            .expect("send SIGTERM");
+        trigger_tx.send(Ok(Trigger::Sigterm)).expect("send SIGTERM");
         time::sleep(Duration::from_millis(30)).await;
         assert!(!supervisor.is_finished(), "active request was not drained");
         assert_eq!(fixture.control.connection_count(), 1);
@@ -743,9 +740,7 @@ mod tests {
             trigger_rx,
         ));
 
-        trigger_tx
-            .send(Ok(Trigger::Sigterm))
-            .expect("send SIGTERM");
+        trigger_tx.send(Ok(Trigger::Sigterm)).expect("send SIGTERM");
         let outcome = time::timeout(Duration::from_secs(1), supervisor)
             .await
             .expect("deadline supervisor timed out")
