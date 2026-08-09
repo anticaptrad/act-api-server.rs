@@ -1,0 +1,57 @@
+name: Sync graceful-shutdown lockfile
+
+on:
+  push:
+    branches:
+      - agent/graceful-shutdown-contract
+    paths:
+      - Cargo.toml
+      - src/server.rs
+      - src/server/shutdown.rs
+      - .github/workflows/sync-shutdown-lockfile.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-graceful-shutdown-lockfile
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out rollout branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Verify formatting
+        run: cargo fmt --all --check
+
+      - name: Resolve dependency graph and compile every test target
+        run: cargo test --no-run --all-targets --all-features
+
+      - name: Commit only the generated lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- Cargo.lock; then
+            echo 'Cargo.lock is already current.'
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Cargo.lock
+          test "$(git diff --cached --name-only)" = 'Cargo.lock'
+          git commit -m 'chore: update lockfile for shutdown server'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
