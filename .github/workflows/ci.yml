@@ -56,17 +56,7 @@ jobs:
           retention-days: 7
 
       - name: Test
-        shell: bash
-        run: |
-          set -euo pipefail
-          # The second-SIGINT socket test injects a TTY lifecycle configuration.
-          # Keep its process stdin open and idle so hosted CI's default /dev/null
-          # does not impersonate an immediate terminal EOF / Ctrl-D.
-          fifo="$(mktemp -u)"
-          mkfifo "$fifo"
-          exec 3<>"$fifo"
-          trap 'exec 3>&-; rm -f "$fifo"' EXIT
-          cargo test --locked --all-targets --all-features <"$fifo"
+        run: cargo test --locked --all-targets --all-features
 
       - name: Build release binary
         run: cargo build --locked --release
