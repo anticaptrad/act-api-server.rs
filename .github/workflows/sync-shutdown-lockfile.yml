@@ -53,8 +53,8 @@ jobs:
 
           shutdown = Path("src/server/shutdown.rs")
           text = shutdown.read_text()
-          old = "axum_server::from_tcp(listener)\n            .expect(\"create test server\")\n            .handle(handle.clone())"
-          new = "axum_server::from_tcp(listener)\n            .handle(handle.clone())"
+          old = "axum_server::from_tcp(listener)\n            .expect(\"create test server\")\n            .handle("
+          new = "axum_server::from_tcp(listener)\n            .handle("
           if old in text:
               shutdown.write_text(text.replace(old, new, 1))
           elif new not in text:
