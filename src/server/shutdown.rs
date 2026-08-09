@@ -6,12 +6,7 @@ use std::{
 };
 
 use axum_server::Handle;
-use tokio::{
-    signal,
-    sync::mpsc,
-    task::JoinHandle,
-    time,
-};
+use tokio::{signal, sync::mpsc, task::JoinHandle, time};
 
 const DEFAULT_SHUTDOWN_GRACE_MS: u64 = 10_000;
 const FORCE_SETTLE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -487,7 +482,7 @@ struct Signals {
 #[cfg(unix)]
 impl Signals {
     fn new() -> io::Result<Self> {
-        use signal::unix::{SignalKind, signal};
+        use signal::unix::{signal, SignalKind};
 
         Ok(Self {
             sigint: signal(SignalKind::interrupt())?,
@@ -526,7 +521,7 @@ impl Signals {
 mod tests {
     use std::{net::TcpListener, sync::Arc};
 
-    use axum::{Router, routing::get};
+    use axum::{routing::get, Router};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpStream,
@@ -659,7 +654,9 @@ mod tests {
             trigger_rx,
         ));
 
-        trigger_tx.send(Ok(Trigger::Sigterm)).expect("send SIGTERM");
+        trigger_tx
+            .send(Ok(Trigger::Sigterm))
+            .expect("send SIGTERM");
         time::sleep(Duration::from_millis(30)).await;
         assert!(!supervisor.is_finished(), "active request was not drained");
         assert_eq!(fixture.control.connection_count(), 1);
@@ -670,7 +667,11 @@ mod tests {
             .await
             .expect("graceful response timed out")
             .expect("read graceful response");
-        assert!(response.windows(b"drained".len()).any(|part| part == b"drained"));
+        assert!(
+            response
+                .windows(b"drained".len())
+                .any(|part| part == b"drained")
+        );
 
         let outcome = time::timeout(Duration::from_secs(1), supervisor)
             .await
@@ -699,7 +700,9 @@ mod tests {
             trigger_rx,
         ));
 
-        trigger_tx.send(Ok(Trigger::Sigint)).expect("send first SIGINT");
+        trigger_tx
+            .send(Ok(Trigger::Sigint))
+            .expect("send first SIGINT");
         time::sleep(Duration::from_millis(30)).await;
         assert!(!supervisor.is_finished(), "first SIGINT forced shutdown");
         assert_eq!(fixture.control.connection_count(), 1);
@@ -740,7 +743,9 @@ mod tests {
             trigger_rx,
         ));
 
-        trigger_tx.send(Ok(Trigger::Sigterm)).expect("send SIGTERM");
+        trigger_tx
+            .send(Ok(Trigger::Sigterm))
+            .expect("send SIGTERM");
         let outcome = time::timeout(Duration::from_secs(1), supervisor)
             .await
             .expect("deadline supervisor timed out")
