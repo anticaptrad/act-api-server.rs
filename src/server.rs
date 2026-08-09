@@ -1,6 +1,7 @@
-use std::{net::SocketAddr, sync::Arc};
-
-use tokio::sync::oneshot;
+use std::{
+    net::{SocketAddr, TcpListener},
+    sync::Arc,
+};
 
 use crate::{config, nats, routes, telemetry, youtube};
 
@@ -42,16 +43,24 @@ async fn serve(cfg: config::Config) -> anyhow::Result<()> {
     });
 
     let address = bind_address(cfg.port);
-    let listener = tokio::net::TcpListener::bind(address).await?;
-    tracing::info!(%address, service = %cfg.service_name, "act-api-server listening");
+    let listener = TcpListener::bind(address)?;
+    listener.set_nonblocking(true)?;
+    let local_address = listener.local_addr()?;
+    tracing::info!(%local_address, service = %cfg.service_name, "act-api-server listening");
 
-    let (graceful_tx, graceful_rx) = oneshot::channel();
-    let server = axum::serve(listener, app).with_graceful_shutdown(async move {
-        let _ = graceful_rx.await;
-    });
-    let server_handle = tokio::spawn(async move { server.await });
+    let server_control = axum_server::Handle::new();
+    let server = axum_server::from_tcp(listener)?
+        .handle(server_control.clone())
+        .serve(app.into_make_service());
+    let server_handle = tokio::spawn(server);
 
-    shutdown::supervise(server_handle, graceful_tx, shutdown::Config::from_env()).await
+    shutdown::supervise(
+        server_handle,
+        server_control,
+        shutdown::Config::from_env(),
+    )
+    .await?;
+    Ok(())
 }
 
 fn bind_address(port: u16) -> SocketAddr {
