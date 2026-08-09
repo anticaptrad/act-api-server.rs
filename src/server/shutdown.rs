@@ -150,6 +150,7 @@ impl Transition {
 pub(super) struct Config {
     grace_period: Duration,
     stdin_is_tty: bool,
+    watch_stdin_eof: bool,
 }
 
 impl Config {
@@ -182,6 +183,7 @@ impl Config {
         Self {
             grace_period: Duration::from_millis(grace_ms),
             stdin_is_tty: io::stdin().is_terminal(),
+            watch_stdin_eof: true,
         }
     }
 }
@@ -277,7 +279,7 @@ async fn supervise_with_triggers(
         "graceful shutdown requested; listener is closing and active requests are draining"
     );
 
-    let mut eof_receiver = if first.show_force_hint {
+    let mut eof_receiver = if first.show_force_hint && config.watch_stdin_eof {
         tracing::info!(
             event = "shutdown_force_available",
             phase = state.phase.as_str(),
@@ -619,6 +621,7 @@ mod tests {
         Config {
             grace_period,
             stdin_is_tty,
+            watch_stdin_eof: false,
         }
     }
 
