@@ -2,17 +2,19 @@ use std::{
     env,
     future::pending,
     io::{self, IsTerminal, Read},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
+use axum_server::Handle;
 use tokio::{
     signal,
-    sync::{mpsc, oneshot},
+    sync::mpsc,
     task::JoinHandle,
     time,
 };
 
 const DEFAULT_SHUTDOWN_GRACE_MS: u64 = 10_000;
+const FORCE_SETTLE_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Phase {
@@ -51,6 +53,10 @@ impl Trigger {
             Self::Timeout => "timeout",
             Self::GracefulComplete => "graceful_complete",
         }
+    }
+
+    const fn is_signal(self) -> bool {
+        matches!(self, Self::Sigint | Self::Sigterm)
     }
 }
 
@@ -185,13 +191,48 @@ impl Config {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Outcome {
+    forced: bool,
+    trigger: Trigger,
+}
+
 pub(super) async fn supervise(
-    mut server_handle: JoinHandle<io::Result<()>>,
-    graceful_tx: oneshot::Sender<()>,
+    server_handle: JoinHandle<io::Result<()>>,
+    server_control: Handle,
     config: Config,
 ) -> anyhow::Result<()> {
     let mut signals = Signals::new()?;
+    let (trigger_tx, trigger_rx) = mpsc::unbounded_channel();
+    let signal_task = tokio::spawn(async move {
+        loop {
+            match signals.recv().await {
+                Ok(trigger) => {
+                    if trigger_tx.send(Ok(trigger)).is_err() {
+                        return;
+                    }
+                }
+                Err(error) => {
+                    let _ = trigger_tx.send(Err(error));
+                    return;
+                }
+            }
+        }
+    });
 
+    let result = supervise_with_triggers(server_handle, server_control, config, trigger_rx).await;
+    signal_task.abort();
+    let _ = signal_task.await;
+    result.map(|_| ())
+}
+
+async fn supervise_with_triggers(
+    mut server_handle: JoinHandle<io::Result<()>>,
+    server_control: Handle,
+    config: Config,
+    mut triggers: mpsc::UnboundedReceiver<io::Result<Trigger>>,
+) -> anyhow::Result<Outcome> {
+    let started = Instant::now();
     let first_trigger = tokio::select! {
         result = &mut server_handle => {
             flatten_server_result(result)?;
@@ -201,17 +242,32 @@ pub(super) async fn supervise(
                 trigger = "server_complete",
                 stdin_is_tty = config.stdin_is_tty,
                 grace_ms = grace_ms(config.grace_period),
+                signal_count = 0_u32,
+                active_connections = server_control.connection_count(),
+                elapsed_ms = elapsed_ms(started),
                 forced = false,
                 "server completed without a shutdown signal"
             );
-            return Ok(());
+            return Ok(Outcome {
+                forced: false,
+                trigger: Trigger::GracefulComplete,
+            });
         }
-        trigger = signals.recv() => trigger?,
+        trigger = receive_trigger(&mut triggers) => trigger?,
     };
 
     let first = State::new(config.stdin_is_tty).apply(first_trigger);
-    debug_assert_eq!(first.action, Action::BeginGraceful);
+    anyhow::ensure!(
+        first.action == Action::BeginGraceful,
+        "invalid first shutdown trigger: {first_trigger:?}"
+    );
     let mut state = first.state;
+    let mut signal_count = u32::from(first_trigger.is_signal());
+
+    // The Handle owns both the listener and all accepted connection tasks. None
+    // means the supervisor, rather than the server crate, owns the deadline and
+    // can still honor a second interactive signal or Ctrl-D.
+    server_control.graceful_shutdown(None);
 
     tracing::info!(
         event = "shutdown_requested",
@@ -219,21 +275,12 @@ pub(super) async fn supervise(
         trigger = first_trigger.as_str(),
         stdin_is_tty = state.stdin_is_tty,
         grace_ms = grace_ms(config.grace_period),
+        signal_count,
+        active_connections = server_control.connection_count(),
+        elapsed_ms = elapsed_ms(started),
         forced = false,
         "graceful shutdown requested; listener is closing and active requests are draining"
     );
-
-    if graceful_tx.send(()).is_err() {
-        tracing::warn!(
-            event = "shutdown_notification_late",
-            phase = state.phase.as_str(),
-            trigger = first_trigger.as_str(),
-            stdin_is_tty = state.stdin_is_tty,
-            grace_ms = grace_ms(config.grace_period),
-            forced = false,
-            "server completed before the graceful-shutdown notification was delivered"
-        );
-    }
 
     let mut eof_receiver = if first.show_force_hint {
         tracing::info!(
@@ -242,6 +289,9 @@ pub(super) async fn supervise(
             trigger = first_trigger.as_str(),
             stdin_is_tty = true,
             grace_ms = grace_ms(config.grace_period),
+            signal_count,
+            active_connections = server_control.connection_count(),
+            elapsed_ms = elapsed_ms(started),
             forced = false,
             "press Ctrl-C again or Ctrl-D to force shutdown"
         );
@@ -263,16 +313,25 @@ pub(super) async fn supervise(
                 trigger = first_trigger.as_str(),
                 stdin_is_tty = state.stdin_is_tty,
                 grace_ms = grace_ms(config.grace_period),
+                signal_count,
+                active_connections = server_control.connection_count(),
+                elapsed_ms = elapsed_ms(started),
                 forced = false,
                 "graceful shutdown complete"
             );
-            return Ok(());
+            return Ok(Outcome {
+                forced: false,
+                trigger: first_trigger,
+            });
         }
-        trigger = signals.recv() => trigger?,
+        trigger = receive_trigger(&mut triggers) => trigger?,
         _ = &mut deadline => Trigger::Timeout,
         () = receive_eof(&mut eof_receiver) => Trigger::StdinEof,
     };
 
+    if force_trigger.is_signal() {
+        signal_count = signal_count.saturating_add(1);
+    }
     let forced = state.apply(force_trigger);
     anyhow::ensure!(
         forced.action == Action::Force,
@@ -286,34 +345,76 @@ pub(super) async fn supervise(
         event = "shutdown_forced",
         phase = state.phase.as_str(),
         trigger = force_trigger.as_str(),
+        first_trigger = first_trigger.as_str(),
         stdin_is_tty = state.stdin_is_tty,
         grace_ms = grace_ms(config.grace_period),
+        signal_count,
+        active_connections = server_control.connection_count(),
+        elapsed_ms = elapsed_ms(started),
         forced = true,
         "forceful shutdown requested; active connections will be dropped"
     );
 
-    server_handle.abort();
-    match server_handle.await {
-        Err(error) if error.is_cancelled() => {}
-        Err(error) => return Err(error.into()),
-        Ok(Err(error)) => return Err(error.into()),
-        Ok(Ok(())) => {}
+    // Unlike aborting Axum's outer future, Handle::shutdown reaches every
+    // accepted connection task managed by axum-server.
+    server_control.shutdown();
+    match time::timeout(FORCE_SETTLE_TIMEOUT, &mut server_handle).await {
+        Ok(result) => flatten_server_result(result)?,
+        Err(_) => {
+            let remaining = server_control.connection_count();
+            tracing::error!(
+                event = "shutdown_force_timeout",
+                phase = state.phase.as_str(),
+                trigger = force_trigger.as_str(),
+                active_connections = remaining,
+                settle_ms = grace_ms(FORCE_SETTLE_TIMEOUT),
+                "server did not settle after immediate shutdown"
+            );
+            server_handle.abort();
+            let _ = server_handle.await;
+            anyhow::bail!(
+                "server did not settle within {} ms after forced shutdown; {remaining} connections remained",
+                grace_ms(FORCE_SETTLE_TIMEOUT)
+            );
+        }
     }
 
     tracing::info!(
         event = "shutdown_complete",
         phase = Phase::Complete.as_str(),
         trigger = force_trigger.as_str(),
+        first_trigger = first_trigger.as_str(),
         stdin_is_tty = state.stdin_is_tty,
         grace_ms = grace_ms(config.grace_period),
+        signal_count,
+        active_connections = server_control.connection_count(),
+        elapsed_ms = elapsed_ms(started),
         forced = true,
         "forceful shutdown complete"
     );
-    Ok(())
+    Ok(Outcome {
+        forced: true,
+        trigger: force_trigger,
+    })
 }
 
 fn grace_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+async fn receive_trigger(
+    receiver: &mut mpsc::UnboundedReceiver<io::Result<Trigger>>,
+) -> io::Result<Trigger> {
+    receiver.recv().await.unwrap_or_else(|| {
+        Err(io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "shutdown signal stream closed",
+        ))
+    })
 }
 
 fn spawn_stdin_eof_watcher() -> Option<mpsc::UnboundedReceiver<()>> {
@@ -423,7 +524,243 @@ impl Signals {
 
 #[cfg(test)]
 mod tests {
+    use std::{net::TcpListener, sync::Arc};
+
+    use axum::{Router, routing::get};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpStream,
+        sync::Notify,
+    };
+
     use super::*;
+
+    struct ServerFixture {
+        server_handle: JoinHandle<io::Result<()>>,
+        control: Handle,
+        address: std::net::SocketAddr,
+        request_started: Arc<Notify>,
+        release_request: Option<Arc<Notify>>,
+    }
+
+    async fn start_server(release_request: bool) -> ServerFixture {
+        let request_started = Arc::new(Notify::new());
+        let release = release_request.then(|| Arc::new(Notify::new()));
+        let route_started = Arc::clone(&request_started);
+        let route_release = release.clone();
+
+        let app = Router::new().route(
+            "/hang",
+            get(move || {
+                let request_started = Arc::clone(&route_started);
+                let release = route_release.clone();
+                async move {
+                    request_started.notify_one();
+                    match release {
+                        Some(release) => {
+                            release.notified().await;
+                            "drained"
+                        }
+                        None => pending::<&'static str>().await,
+                    }
+                }
+            }),
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test listener");
+        listener
+            .set_nonblocking(true)
+            .expect("make test listener nonblocking");
+        let address = listener.local_addr().expect("test listener address");
+        let control = Handle::new();
+        let server = axum_server::from_tcp(listener)
+            .expect("create test server")
+            .handle(control.clone())
+            .serve(app.into_make_service());
+        let server_handle = tokio::spawn(server);
+
+        ServerFixture {
+            server_handle,
+            control,
+            address,
+            request_started,
+            release_request: release,
+        }
+    }
+
+    async fn open_hanging_request(fixture: &ServerFixture) -> TcpStream {
+        let mut stream = TcpStream::connect(fixture.address)
+            .await
+            .expect("connect test client");
+        stream
+            .write_all(b"GET /hang HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .expect("write test request");
+        time::timeout(Duration::from_secs(1), fixture.request_started.notified())
+            .await
+            .expect("request did not start");
+        wait_for_connections(&fixture.control, 1).await;
+        stream
+    }
+
+    async fn wait_for_connections(control: &Handle, expected: usize) {
+        time::timeout(Duration::from_secs(1), async {
+            loop {
+                if control.connection_count() == expected {
+                    return;
+                }
+                time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "connection count did not reach {expected}; current={}",
+                control.connection_count()
+            )
+        });
+    }
+
+    fn test_config(stdin_is_tty: bool, grace_period: Duration) -> Config {
+        Config {
+            grace_period,
+            stdin_is_tty,
+        }
+    }
+
+    fn trigger_channel() -> (
+        mpsc::UnboundedSender<io::Result<Trigger>>,
+        mpsc::UnboundedReceiver<io::Result<Trigger>>,
+    ) {
+        mpsc::unbounded_channel()
+    }
+
+    fn assert_stream_closed(result: io::Result<usize>) {
+        match result {
+            Ok(0) | Err(_) => {}
+            Ok(read) => panic!("expected closed connection, read {read} bytes"),
+        }
+    }
+
+    #[tokio::test]
+    async fn sigterm_drains_a_real_active_request() {
+        let fixture = start_server(true).await;
+        let mut client = open_hanging_request(&fixture).await;
+        let release = fixture
+            .release_request
+            .as_ref()
+            .expect("release notifier")
+            .clone();
+        let (trigger_tx, trigger_rx) = trigger_channel();
+        let supervisor = tokio::spawn(supervise_with_triggers(
+            fixture.server_handle,
+            fixture.control.clone(),
+            test_config(false, Duration::from_secs(2)),
+            trigger_rx,
+        ));
+
+        trigger_tx.send(Ok(Trigger::Sigterm)).expect("send SIGTERM");
+        time::sleep(Duration::from_millis(30)).await;
+        assert!(!supervisor.is_finished(), "active request was not drained");
+        assert_eq!(fixture.control.connection_count(), 1);
+
+        release.notify_one();
+        let mut response = Vec::new();
+        time::timeout(Duration::from_secs(1), client.read_to_end(&mut response))
+            .await
+            .expect("graceful response timed out")
+            .expect("read graceful response");
+        assert!(response.windows(b"drained".len()).any(|part| part == b"drained"));
+
+        let outcome = time::timeout(Duration::from_secs(1), supervisor)
+            .await
+            .expect("graceful supervisor timed out")
+            .expect("supervisor task panicked")
+            .expect("graceful supervisor failed");
+        assert_eq!(
+            outcome,
+            Outcome {
+                forced: false,
+                trigger: Trigger::Sigterm,
+            }
+        );
+        assert_eq!(fixture.control.connection_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn second_tty_sigint_force_closes_a_real_active_connection() {
+        let fixture = start_server(false).await;
+        let mut client = open_hanging_request(&fixture).await;
+        let (trigger_tx, trigger_rx) = trigger_channel();
+        let supervisor = tokio::spawn(supervise_with_triggers(
+            fixture.server_handle,
+            fixture.control.clone(),
+            test_config(true, Duration::from_secs(2)),
+            trigger_rx,
+        ));
+
+        trigger_tx.send(Ok(Trigger::Sigint)).expect("send first SIGINT");
+        time::sleep(Duration::from_millis(30)).await;
+        assert!(!supervisor.is_finished(), "first SIGINT forced shutdown");
+        assert_eq!(fixture.control.connection_count(), 1);
+
+        trigger_tx
+            .send(Ok(Trigger::Sigint))
+            .expect("send second SIGINT");
+        let outcome = time::timeout(Duration::from_secs(1), supervisor)
+            .await
+            .expect("forced supervisor timed out")
+            .expect("supervisor task panicked")
+            .expect("forced supervisor failed");
+        assert_eq!(
+            outcome,
+            Outcome {
+                forced: true,
+                trigger: Trigger::Sigint,
+            }
+        );
+
+        let mut byte = [0_u8; 1];
+        let read = time::timeout(Duration::from_secs(1), client.read(&mut byte))
+            .await
+            .expect("client did not observe forced close");
+        assert_stream_closed(read);
+        assert_eq!(fixture.control.connection_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn grace_deadline_force_closes_a_real_active_connection() {
+        let fixture = start_server(false).await;
+        let mut client = open_hanging_request(&fixture).await;
+        let (trigger_tx, trigger_rx) = trigger_channel();
+        let supervisor = tokio::spawn(supervise_with_triggers(
+            fixture.server_handle,
+            fixture.control.clone(),
+            test_config(false, Duration::from_millis(50)),
+            trigger_rx,
+        ));
+
+        trigger_tx.send(Ok(Trigger::Sigterm)).expect("send SIGTERM");
+        let outcome = time::timeout(Duration::from_secs(1), supervisor)
+            .await
+            .expect("deadline supervisor timed out")
+            .expect("supervisor task panicked")
+            .expect("deadline supervisor failed");
+        assert_eq!(
+            outcome,
+            Outcome {
+                forced: true,
+                trigger: Trigger::Timeout,
+            }
+        );
+
+        let mut byte = [0_u8; 1];
+        let read = time::timeout(Duration::from_secs(1), client.read(&mut byte))
+            .await
+            .expect("client did not observe deadline close");
+        assert_stream_closed(read);
+        assert_eq!(fixture.control.connection_count(), 0);
+    }
 
     #[test]
     fn tty_second_sigint_forces() {
