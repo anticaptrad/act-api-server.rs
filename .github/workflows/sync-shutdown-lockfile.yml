@@ -35,6 +35,32 @@ jobs:
         with:
           components: rustfmt
 
+      - name: Migrate call sites to axum-server 0.7.3
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          server = Path("src/server.rs")
+          text = server.read_text()
+          old = "axum_server::from_tcp(listener)?\n        .handle(server_control.clone())"
+          new = "axum_server::from_tcp(listener)\n        .handle(server_control.clone())"
+          if old in text:
+              server.write_text(text.replace(old, new, 1))
+          elif new not in text:
+              raise SystemExit("src/server.rs does not match either supported axum-server call form")
+
+          shutdown = Path("src/server/shutdown.rs")
+          text = shutdown.read_text()
+          old = "axum_server::from_tcp(listener)\n            .expect(\"create test server\")\n            .handle(handle.clone())"
+          new = "axum_server::from_tcp(listener)\n            .handle(handle.clone())"
+          if old in text:
+              shutdown.write_text(text.replace(old, new, 1))
+          elif new not in text:
+              raise SystemExit("shutdown test does not match either supported axum-server call form")
+          PY
+
       - name: Apply canonical Rust formatting
         run: cargo fmt --all
 
