@@ -54,12 +54,7 @@ async fn serve(cfg: config::Config) -> anyhow::Result<()> {
         .serve(app.into_make_service());
     let server_handle = tokio::spawn(server);
 
-    shutdown::supervise(
-        server_handle,
-        server_control,
-        shutdown::Config::from_env(),
-    )
-    .await?;
+    shutdown::supervise(server_handle, server_control, shutdown::Config::from_env()).await?;
     Ok(())
 }
 
