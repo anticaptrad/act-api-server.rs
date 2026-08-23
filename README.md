@@ -141,3 +141,11 @@ grep -RInE '^(<<<<<<<|=======|>>>>>>>)' --exclude-dir=.git .
 - The Rust API does not proxy GAS setup, API-key rotation, or configuration mutation actions.
 - NATS events include only action metadata and selected identifiers; they omit descriptions, email content, tokens, resumable session URLs, and API keys.
 - Public and unlisted actions remain disabled unless `YOUTUBE_ALLOW_PUBLIC_ACTIONS=true` and the GAS dashboard independently permits them.
+
+## Environment secrets
+
+Secrets live in this repo **encrypted** with [sops](https://github.com/getsops/sops) + [age](https://github.com/FiloSottile/age):
+`env/enc/<dev|prod>.env.enc` is committed; `just env-use <name>` decrypts it to
+`env/dec/<name>.env` (gitignored, mode 0600) and symlinks `./.env` to it. The
+Nix dev shell provides the tooling, `just env-audit` runs keyless in CI, and
+containers decrypt at `docker run` — never at build. See [`env/README.md`](env/README.md).
