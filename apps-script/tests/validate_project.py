@@ -69,7 +69,7 @@ check(manifest.get('webapp', {}).get('executeAs') == 'USER_DEPLOYING', 'Default 
 all_server = '\n'.join(path.read_text() for path in sorted(SRC.glob('*.gs')))
 for function_name in [
     'doGet', 'doPost', 'rpc', 'setupApplication_', 'getMyChannel_',
-    'getAnalyticsReport_', 'startUploadJob_', 'processUploadJob_',
+    'getAnalyticsReport_', 'ingestHttpVideo_', 'startUploadJob_', 'processUploadJob_',
     'processAllPendingUploads', 'ingestGmailVideoAttachments_', 'rotateApiKey_'
 ]:
     check(re.search(rf'function\s+{re.escape(function_name)}\s*\(', all_server) is not None,
