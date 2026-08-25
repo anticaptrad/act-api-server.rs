@@ -21,6 +21,11 @@ Configuration comes only from the process environment. Do not add `dotenv` or co
 | --- | --- | --- | --- |
 | `PORT` | No | `8080` | HTTP listen port |
 | `NATS_URL` | No | `nats://localhost:4222` | NATS endpoint |
+| `ACT_OPERATION_DATABASE_URL` | For durable async operations | unset/closed | Dedicated Postgres journal with the reviewed inbox/status/outbox schema; enables JetStream only when Shared Auth and NATS are also available |
+| `ACT_API_MTLS_ADDR` | For stateful TCP | unset/closed | Dedicated IP socket for the bounded mTLS operation listener |
+| `ACT_API_TLS_CERT_FILE` | With mTLS address | unset/closed | Server certificate chain injected at runtime |
+| `ACT_API_TLS_KEY_FILE` | With mTLS address | unset/closed | Server private key injected at runtime |
+| `ACT_API_CLIENT_CA_FILE` | With mTLS address | unset/closed | CA used to require and verify web-tier client certificates |
 | `OTEL_SERVICE_NAME` | No | `act-api-server` | OpenTelemetry service name |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | unset | OTLP collector endpoint |
 | `SHARED_AUTH_URL` | For protected routes | unset/closed | Shared Auth base URL; public cleartext HTTP is rejected |
@@ -166,12 +171,23 @@ paths without treating them as interchangeable:
    and bounds connection time, request time, and response bytes.
 3. `stateful_mtls_tcp` requires certificate/key references and mutual TLS. Each
    operation is a strict four-byte length-prefixed frame with a size and
-   deadline cap; the API must authenticate every operation rather than trusting
-   connection age.
+   deadline cap. `src/transport_runtime.rs` starts the real optional listener,
+   bounds concurrent connections, and authenticates every operation through
+   Shared Auth rather than trusting connection age. The verified subject must
+   exactly match the envelope subject.
 4. `jet_stream_async` requires a stable operation ID/deduplication key, durable
    consumer, explicit acknowledgements, bounded redelivery, acknowledgement
-   wait, and publish deadline. Broker unavailability remains fail-soft for the
-   ordinary HTTP control plane.
+   wait, and publish deadline. The live worker records a SHA-256 request
+   fingerprint (never the bearer or raw request), owner-scoped status, and
+   result outbox transactionally before acknowledging the request. It resumes
+   unpublished results after redelivery. Broker or journal
+   unavailability remains fail-soft for the ordinary HTTP control plane and
+   fail-closed for the async mode.
+
+The serialized migration job applies `migrations/0001_durable_operations.sql`;
+the API runtime never performs startup DDL. Authenticated callers can query
+their own operation state at `GET /v1/operations/:operation_id`. Operation IDs
+owned by another subject are indistinguishable from missing IDs.
 
 ## Environment secrets
 

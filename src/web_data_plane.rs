@@ -12,6 +12,7 @@ use serde_json::Value as JsonValue;
 
 pub const MAX_OPERATION_BYTES: usize = 16 * 1024;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
+pub const MAX_OPERATION_DEADLINE_MS: u64 = 30_000;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -54,8 +55,12 @@ impl OperationEnvelope {
         if encoded.len() > MAX_OPERATION_BYTES {
             return Err(DataPlaneError::PayloadTooLarge);
         }
-        if self.deadline_unix_ms <= unix_time_ms() {
+        let now = unix_time_ms();
+        if self.deadline_unix_ms <= now {
             return Err(DataPlaneError::DeadlineExpired);
+        }
+        if self.deadline_unix_ms.saturating_sub(now) > MAX_OPERATION_DEADLINE_MS {
+            return Err(DataPlaneError::DeadlineTooFar);
         }
         if mode == WebApiMode::DirectReadOnlyDatabase && self.operation != DataOperation::Read {
             return Err(DataPlaneError::DirectDatabaseWrite);
@@ -156,6 +161,8 @@ pub struct StatefulMtlsTcpPolicy {
     pub client_certificate_ref: String,
     pub client_private_key_ref: String,
     pub mutual_tls_required: bool,
+    pub per_operation_authentication: bool,
+    pub bounded_backpressure: bool,
     pub connect_timeout_ms: u64,
     pub operation_timeout_ms: u64,
     pub max_frame_bytes: usize,
@@ -172,6 +179,8 @@ impl StatefulMtlsTcpPolicy {
             || self.server_name.trim().is_empty()
             || secret_refs.iter().any(|value| value.trim().is_empty())
             || !self.mutual_tls_required
+            || !self.per_operation_authentication
+            || !self.bounded_backpressure
             || !(1..=2_000).contains(&self.connect_timeout_ms)
             || !(1..=30_000).contains(&self.operation_timeout_ms)
             || !(1..=MAX_FRAME_BYTES).contains(&self.max_frame_bytes)
@@ -192,6 +201,10 @@ pub struct JetStreamPolicy {
     pub ack_wait_ms: u64,
     pub publish_timeout_ms: u64,
     pub explicit_ack: bool,
+    pub transactional_outbox: bool,
+    pub durable_inbox_dedupe: bool,
+    pub queryable_status: bool,
+    pub bounded_backpressure: bool,
 }
 
 impl JetStreamPolicy {
@@ -203,6 +216,10 @@ impl JetStreamPolicy {
             || !(1_000..=120_000).contains(&self.ack_wait_ms)
             || !(1..=10_000).contains(&self.publish_timeout_ms)
             || !self.explicit_ack
+            || !self.transactional_outbox
+            || !self.durable_inbox_dedupe
+            || !self.queryable_status
+            || !self.bounded_backpressure
         {
             return Err(DataPlaneError::UnsafeJetStreamPolicy);
         }
@@ -257,9 +274,12 @@ fn validate_identifier(value: &str, maximum: usize) -> Result<(), DataPlaneError
 }
 
 fn valid_host_port(value: &str) -> bool {
-    value
-        .rsplit_once(':')
-        .is_some_and(|(host, port)| !host.is_empty() && port.parse::<u16>().is_ok())
+    value.rsplit_once(':').is_some_and(|(host, port)| {
+        !host.is_empty()
+            && host.len() <= 253
+            && !host.chars().any(char::is_whitespace)
+            && port.parse::<u16>().is_ok_and(|port| port != 0)
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -268,6 +288,7 @@ pub enum DataPlaneError {
     InvalidIdentifier,
     PayloadTooLarge,
     DeadlineExpired,
+    DeadlineTooFar,
     DirectDatabaseWrite,
     MissingDedupeKey,
     Serialization,
@@ -337,6 +358,8 @@ mod tests {
             client_certificate_ref: "secret/web-cert".to_string(),
             client_private_key_ref: "secret/web-key".to_string(),
             mutual_tls_required: true,
+            per_operation_authentication: true,
+            bounded_backpressure: true,
             connect_timeout_ms: 500,
             operation_timeout_ms: 5_000,
             max_frame_bytes: MAX_FRAME_BYTES,
@@ -375,6 +398,10 @@ mod tests {
             ack_wait_ms: 30_000,
             publish_timeout_ms: 2_000,
             explicit_ack: true,
+            transactional_outbox: true,
+            durable_inbox_dedupe: true,
+            queryable_status: true,
+            bounded_backpressure: true,
         };
         assert_eq!(policy.validate(), Ok(()));
     }

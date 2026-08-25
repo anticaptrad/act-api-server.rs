@@ -15,11 +15,11 @@ pub const EVENT_SUBJECT: &str = "act.events.>";
 pub async fn connect(url: &str) -> Option<Client> {
     match async_nats::connect(url).await {
         Ok(client) => {
-            tracing::info!(%url, "connected to NATS bridge");
+            tracing::info!("connected to NATS bridge");
             Some(client)
         }
         Err(err) => {
-            tracing::warn!(%url, error = %err, "NATS unavailable; continuing without event bus");
+            tracing::warn!(error = %err, "NATS unavailable; continuing without event bus");
             None
         }
     }

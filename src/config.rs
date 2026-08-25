@@ -18,6 +18,8 @@ pub struct Config {
     pub service_name: String,
     pub shared_auth: Option<SharedAuthConfig>,
     pub youtube: Option<YoutubeConfig>,
+    pub operation_database_url: Option<String>,
+    pub mtls: Option<MtlsConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -25,6 +27,14 @@ pub struct SharedAuthConfig {
     pub base_url: String,
     pub service_credential: String,
     pub audience: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct MtlsConfig {
+    pub address: String,
+    pub certificate_file: String,
+    pub private_key_file: String,
+    pub client_ca_file: String,
 }
 
 #[derive(Debug, Clone)]
@@ -113,6 +123,17 @@ impl Config {
         };
 
         validate_auth_configuration(shared_auth.is_some(), youtube.is_some())?;
+        let operation_database_url = env_non_empty("ACT_OPERATION_DATABASE_URL");
+        if operation_database_url.is_some() {
+            validate_durable_nats_url(&nats_url)?;
+            if shared_auth.is_none() {
+                bail!("Shared Auth is required whenever durable JetStream is configured");
+            }
+        }
+        let mtls = parse_mtls_config()?;
+        if mtls.is_some() && shared_auth.is_none() {
+            bail!("Shared Auth is required whenever the mTLS operation listener is configured");
+        }
 
         Ok(Self {
             port,
@@ -120,8 +141,51 @@ impl Config {
             service_name,
             shared_auth,
             youtube,
+            operation_database_url,
+            mtls,
         })
     }
+}
+
+fn parse_mtls_config() -> anyhow::Result<Option<MtlsConfig>> {
+    let values = [
+        env_non_empty("ACT_API_MTLS_ADDR"),
+        env_non_empty("ACT_API_TLS_CERT_FILE"),
+        env_non_empty("ACT_API_TLS_KEY_FILE"),
+        env_non_empty("ACT_API_CLIENT_CA_FILE"),
+    ];
+    if values.iter().all(Option::is_none) {
+        return Ok(None);
+    }
+    let [
+        Some(address),
+        Some(certificate_file),
+        Some(private_key_file),
+        Some(client_ca_file),
+    ] = values
+    else {
+        bail!("all ACT_API_MTLS_ADDR and ACT_API_* TLS file variables are required together")
+    };
+    address
+        .parse::<std::net::SocketAddr>()
+        .context("ACT_API_MTLS_ADDR must be an IP socket address")?;
+    Ok(Some(MtlsConfig {
+        address,
+        certificate_file,
+        private_key_file,
+        client_ca_file,
+    }))
+}
+
+fn validate_durable_nats_url(value: &str) -> anyhow::Result<()> {
+    let allowed = value.starts_with("tls://")
+        || value.starts_with("nats://127.0.0.1")
+        || value.starts_with("nats://localhost")
+        || value.starts_with("nats://[::1]");
+    if !allowed {
+        bail!("durable JetStream requires TLS outside explicit loopback development")
+    }
+    Ok(())
 }
 
 fn validate_auth_configuration(
@@ -187,7 +251,7 @@ fn parse_apps_script_url(raw: &str) -> anyhow::Result<Url> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_apps_script_url, validate_auth_configuration};
+    use super::{parse_apps_script_url, validate_auth_configuration, validate_durable_nats_url};
 
     #[test]
     fn accepts_deployed_apps_script_url() {
@@ -215,5 +279,12 @@ mod tests {
         assert!(validate_auth_configuration(false, true).is_err());
         assert!(validate_auth_configuration(true, true).is_ok());
         assert!(validate_auth_configuration(false, false).is_ok());
+    }
+
+    #[test]
+    fn durable_nats_rejects_remote_cleartext() {
+        assert!(validate_durable_nats_url("tls://nats.example.test:4222").is_ok());
+        assert!(validate_durable_nats_url("nats://127.0.0.1:4222").is_ok());
+        assert!(validate_durable_nats_url("nats://nats.example.test:4222").is_err());
     }
 }

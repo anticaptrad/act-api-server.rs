@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.88"
 
 [dependencies]
+async-trait = "0.1"
 tokio = { version = "1.37.0", features = ["full"] }
 axum = "0.7.5"
 axum-server = "=0.7.3"
@@ -20,6 +21,10 @@ async-nats = "0.50"
 futures = "0.3"
 anyhow = "1.0"
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
+rustls = "0.23"
+sha2 = "0.10"
+tokio-rustls = "0.26"
+tokio-util = { version = "0.7", features = ["codec"] }
 next-loggers = { git = "https://github.com/ores-otel/ores.otel.log", rev = "ca176fb6768a9750d262a536952268625ffd3a8a", package = "oresoftware-next-loggers" }
 sea-orm = { version = "1.1.20", default-features = false, features = ["runtime-tokio-rustls", "sqlx-postgres"] }
 shared-auth-client = { git = "https://github.com/shared-auth/shared-auth-clients", rev = "cc57a85b276bee81ad94decc87df2f48d49cab9f", package = "shared-auth-client" }

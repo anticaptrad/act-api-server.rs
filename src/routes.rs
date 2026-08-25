@@ -1,6 +1,7 @@
 //! HTTP surface for Kubernetes probes and the guarded YouTube control plane.
 
 use std::{
+    sync::Arc,
     sync::atomic::{AtomicU64, Ordering},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
@@ -15,8 +16,10 @@ use axum::{
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use act_api_server::transport_runtime::OperationJournal;
+
 use crate::{
-    auth::{AuthFailure, SharedAuthVerifier},
+    auth::{AuthFailure, AuthSubject, SharedAuthVerifier},
     nats,
     youtube::{YoutubeAction, YoutubeClientError, YoutubeGasClient, redact_map_for_audit},
 };
@@ -30,6 +33,7 @@ pub struct AppState {
     pub nats: Option<async_nats::Client>,
     pub youtube: Option<YoutubeGasClient>,
     pub shared_auth: Option<SharedAuthVerifier>,
+    pub operation_journal: Option<Arc<dyn OperationJournal>>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -38,6 +42,7 @@ pub fn router(state: AppState) -> Router {
         .route("/ready", get(ready))
         .route("/v1/youtube/health", get(youtube_health))
         .route("/v1/youtube/status", get(youtube_status))
+        .route("/v1/operations/:operation_id", get(operation_status))
         .route("/v1/youtube/actions/:action", post(youtube_action))
         .layer(DefaultBodyLimit::max(MAX_CONTROL_BODY_BYTES))
         .with_state(state)
@@ -61,6 +66,7 @@ async fn ready(State(state): State<AppState>) -> Json<Value> {
         "nats_connected": state.nats.is_some(),
         "youtube_configured": state.youtube.is_some(),
         "shared_auth_configured": state.shared_auth.is_some(),
+        "durable_operations_configured": state.operation_journal.is_some(),
     }))
 }
 
@@ -196,7 +202,53 @@ async fn youtube_action(
     }
 }
 
-async fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
+async fn operation_status(
+    State(state): State<AppState>,
+    Path(operation_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    if operation_id.is_empty()
+        || operation_id.len() > 128
+        || operation_id.trim() != operation_id
+        || operation_id.chars().any(char::is_control)
+    {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "INVALID_OPERATION_ID",
+            message: "operation id is invalid".to_string(),
+            details: None,
+            request_id: None,
+        });
+    }
+    let journal = state.operation_journal.as_ref().ok_or_else(|| ApiError {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        code: "DURABLE_OPERATIONS_NOT_CONFIGURED",
+        message: "durable operation status is unavailable".to_string(),
+        details: None,
+        request_id: None,
+    })?;
+    let status = journal
+        .status(&operation_id, &actor.subject)
+        .await
+        .map_err(|_| ApiError {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            code: "DURABLE_OPERATION_STATUS_UNAVAILABLE",
+            message: "durable operation status is unavailable".to_string(),
+            details: None,
+            request_id: None,
+        })?
+        .ok_or_else(|| ApiError {
+            status: StatusCode::NOT_FOUND,
+            code: "OPERATION_NOT_FOUND",
+            message: "operation not found".to_string(),
+            details: None,
+            request_id: None,
+        })?;
+    Ok(Json(json!({"ok": true, "data": status})))
+}
+
+async fn authorize(state: &AppState, headers: &HeaderMap) -> Result<AuthSubject, ApiError> {
     let verifier = state.shared_auth.as_ref().ok_or_else(|| ApiError {
         status: StatusCode::SERVICE_UNAVAILABLE,
         code: "SHARED_AUTH_NOT_CONFIGURED",
@@ -207,7 +259,6 @@ async fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError
     verifier
         .verify(headers, &YOUTUBE_ADMIN_SCOPES)
         .await
-        .map(|_| ())
         .map_err(|failure| match failure {
             AuthFailure::Missing | AuthFailure::Invalid => ApiError {
                 status: StatusCode::UNAUTHORIZED,
@@ -337,6 +388,7 @@ mod tests {
             nats: None,
             youtube: None,
             shared_auth: None,
+            operation_journal: None,
         };
         assert!(authorize(&state, &HeaderMap::new()).await.is_err());
     }
