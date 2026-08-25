@@ -19,6 +19,7 @@ pub struct Config {
     pub shared_auth: Option<SharedAuthConfig>,
     pub youtube: Option<YoutubeConfig>,
     pub operation_database_url: Option<String>,
+    pub operation_attestation_key: Option<String>,
     pub mtls: Option<MtlsConfig>,
 }
 
@@ -124,6 +125,11 @@ impl Config {
 
         validate_auth_configuration(shared_auth.is_some(), youtube.is_some())?;
         let operation_database_url = env_non_empty("ACT_OPERATION_DATABASE_URL");
+        let operation_attestation_key = env_non_empty("ACT_NATS_OPERATION_HMAC_KEY");
+        validate_operation_configuration(
+            operation_database_url.is_some(),
+            operation_attestation_key.as_deref(),
+        )?;
         if operation_database_url.is_some() {
             validate_durable_nats_url(&nats_url)?;
             if shared_auth.is_none() {
@@ -142,6 +148,7 @@ impl Config {
             shared_auth,
             youtube,
             operation_database_url,
+            operation_attestation_key,
             mtls,
         })
     }
@@ -186,6 +193,27 @@ fn validate_durable_nats_url(value: &str) -> anyhow::Result<()> {
         bail!("durable JetStream requires TLS outside explicit loopback development")
     }
     Ok(())
+}
+
+fn validate_operation_configuration(
+    database_enabled: bool,
+    attestation_key: Option<&str>,
+) -> anyhow::Result<()> {
+    match (database_enabled, attestation_key) {
+        (false, None) => Ok(()),
+        (true, None) => {
+            bail!("ACT_NATS_OPERATION_HMAC_KEY is required for durable JetStream operations")
+        }
+        (false, Some(_)) => {
+            bail!("ACT_OPERATION_DATABASE_URL is required with ACT_NATS_OPERATION_HMAC_KEY")
+        }
+        (true, Some(key)) => {
+            if key.len() < 32 || key.chars().any(char::is_control) {
+                bail!("ACT_NATS_OPERATION_HMAC_KEY must contain at least 32 non-control bytes")
+            }
+            Ok(())
+        }
+    }
 }
 
 fn validate_auth_configuration(
@@ -251,7 +279,10 @@ fn parse_apps_script_url(raw: &str) -> anyhow::Result<Url> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_apps_script_url, validate_auth_configuration, validate_durable_nats_url};
+    use super::{
+        parse_apps_script_url, validate_auth_configuration, validate_durable_nats_url,
+        validate_operation_configuration,
+    };
 
     #[test]
     fn accepts_deployed_apps_script_url() {
@@ -286,5 +317,14 @@ mod tests {
         assert!(validate_durable_nats_url("tls://nats.example.test:4222").is_ok());
         assert!(validate_durable_nats_url("nats://127.0.0.1:4222").is_ok());
         assert!(validate_durable_nats_url("nats://nats.example.test:4222").is_err());
+    }
+
+    #[test]
+    fn durable_operations_require_a_separate_strong_attestation_key() {
+        assert!(validate_operation_configuration(false, None).is_ok());
+        assert!(validate_operation_configuration(true, None).is_err());
+        assert!(validate_operation_configuration(false, Some(&"k".repeat(32))).is_err());
+        assert!(validate_operation_configuration(true, Some("too-short")).is_err());
+        assert!(validate_operation_configuration(true, Some(&"k".repeat(32))).is_ok());
     }
 }

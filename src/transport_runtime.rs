@@ -3,13 +3,16 @@
 //! These transports carry the same strict operation envelope as HTTP.  mTLS
 //! authenticates the peer connection, but every frame still carries a user
 //! bearer that is verified by Shared Auth and bound to `envelope.subject`.
-//! JetStream processing uses a database inbox/status/outbox journal so broker
-//! redelivery is idempotent and result publication can resume after a crash.
+//! JetStream carries an operation-bound HMAC attestation after the web tier has
+//! verified that bearer, so user credentials never enter the broker. Processing
+//! uses a database inbox/status/outbox journal so broker redelivery is
+//! idempotent and result publication can resume after a crash.
 
 use std::{io, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use futures::{SinkExt, StreamExt};
+use hmac::{Hmac, Mac};
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, Statement,
     TransactionTrait,
@@ -36,6 +39,9 @@ pub const MAX_TRANSPORT_BYTES: usize = 64 * 1024;
 pub const MAX_TCP_CONNECTIONS: usize = 128;
 pub const MAX_CONCURRENT_OPERATIONS: usize = 32;
 pub const OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
+pub const MIN_OPERATION_HMAC_KEY_BYTES: usize = 32;
+
+const OPERATION_ATTESTATION_PREFIX: &str = "ACT-HMAC-SHA256 ";
 
 const CLAIM_INBOX_SQL: &str = "INSERT INTO act_operation_inbox (operation_id, subject, request_hash, status, received_at) VALUES ($1, $2, $3, 'processing', CURRENT_TIMESTAMP) ON CONFLICT (operation_id) DO NOTHING";
 const READ_INBOX_SQL: &str = "SELECT subject, request_hash, status, result_json FROM act_operation_inbox WHERE operation_id = $1";
@@ -60,7 +66,12 @@ pub struct AuthenticatedOperation {
 
 impl AuthenticatedOperation {
     pub fn validate(&self, mode: WebApiMode) -> Result<(), TransportError> {
-        validate_authorization(&self.authorization)?;
+        match mode {
+            WebApiMode::JetStreamAsync => {
+                validate_operation_attestation_shape(&self.authorization)?;
+            }
+            _ => validate_authorization(&self.authorization)?,
+        }
         self.envelope
             .validate_for(mode)
             .map_err(|_| TransportError::InvalidRequest)
@@ -128,8 +139,8 @@ impl std::error::Error for TransportError {}
 
 #[async_trait]
 pub trait OperationService: Send + Sync {
-    /// Authenticate the bearer, bind its verified subject to the envelope, and
-    /// apply product authorization before returning a result.
+    /// Authenticate either the bearer (TCP) or the operation-bound attestation
+    /// (JetStream), then apply product authorization before returning a result.
     async fn execute(
         &self,
         request: &AuthenticatedOperation,
@@ -491,6 +502,7 @@ pub async fn serve_jetstream(
     context: async_nats::jetstream::Context,
     service: Arc<dyn OperationService>,
     journal: Arc<dyn OperationJournal>,
+    operation_attestation_key: Arc<[u8]>,
     config: JetStreamConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if !(1..=MAX_CONCURRENT_OPERATIONS).contains(&config.max_concurrency) {
@@ -540,9 +552,18 @@ pub async fn serve_jetstream(
         let context = context.clone();
         let service = service.clone();
         let journal = journal.clone();
+        let operation_attestation_key = operation_attestation_key.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            if let Err(error) = handle_jetstream_message(context, service, journal, message).await {
+            if let Err(error) = handle_jetstream_message(
+                context,
+                service,
+                journal,
+                operation_attestation_key,
+                message,
+            )
+            .await
+            {
                 tracing::error!(error = %error, "durable JetStream operation failed");
             }
         });
@@ -554,6 +575,7 @@ async fn handle_jetstream_message(
     context: async_nats::jetstream::Context,
     service: Arc<dyn OperationService>,
     journal: Arc<dyn OperationJournal>,
+    operation_attestation_key: Arc<[u8]>,
     message: async_nats::jetstream::Message,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if message.payload.len() > MAX_TRANSPORT_BYTES {
@@ -581,6 +603,18 @@ async fn handle_jetstream_message(
         }
     };
     if request.validate(WebApiMode::JetStreamAsync).is_err() {
+        message
+            .ack_with(async_nats::jetstream::AckKind::Term)
+            .await?;
+        return Ok(());
+    }
+    if verify_operation_attestation(
+        &operation_attestation_key,
+        &request.envelope,
+        &request.authorization,
+    )
+    .is_err()
+    {
         message
             .ack_with(async_nats::jetstream::AckKind::Term)
             .await?;
@@ -653,15 +687,86 @@ fn validate_authorization(value: &str) -> Result<(), TransportError> {
     Ok(())
 }
 
-fn request_fingerprint(payload: &[u8]) -> String {
-    let digest = Sha256::digest(payload);
+/// Sign a single strict operation envelope for durable transport without
+/// placing the caller's bearer token on the broker or in the durable inbox.
+pub fn sign_operation_attestation(
+    key: &[u8],
+    envelope: &OperationEnvelope,
+) -> Result<String, TransportError> {
+    if key.len() < MIN_OPERATION_HMAC_KEY_BYTES {
+        return Err(TransportError::InvalidState);
+    }
+    let payload = serde_json::to_vec(envelope).map_err(|_| TransportError::InvalidRequest)?;
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).map_err(|_| TransportError::InvalidState)?;
+    mac.update(&payload);
+    Ok(format!(
+        "{OPERATION_ATTESTATION_PREFIX}{}",
+        encode_hex(&mac.finalize().into_bytes())
+    ))
+}
+
+/// Verify an operation-bound attestation in constant time. The signed envelope
+/// includes its subject, operation ID, resource, operation, deadline, payload,
+/// and deduplication key, so changing any field invalidates the request.
+pub fn verify_operation_attestation(
+    key: &[u8],
+    envelope: &OperationEnvelope,
+    value: &str,
+) -> Result<(), TransportError> {
+    if key.len() < MIN_OPERATION_HMAC_KEY_BYTES {
+        return Err(TransportError::Unauthorized);
+    }
+    let encoded = value
+        .strip_prefix(OPERATION_ATTESTATION_PREFIX)
+        .ok_or(TransportError::Unauthorized)?;
+    let signature = decode_sha256_hex(encoded)?;
+    let payload = serde_json::to_vec(envelope).map_err(|_| TransportError::InvalidRequest)?;
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).map_err(|_| TransportError::Unauthorized)?;
+    mac.update(&payload);
+    mac.verify_slice(&signature)
+        .map_err(|_| TransportError::Unauthorized)
+}
+
+fn validate_operation_attestation_shape(value: &str) -> Result<(), TransportError> {
+    let encoded = value
+        .strip_prefix(OPERATION_ATTESTATION_PREFIX)
+        .ok_or(TransportError::Unauthorized)?;
+    decode_sha256_hex(encoded).map(|_| ())
+}
+
+fn decode_sha256_hex(value: &str) -> Result<[u8; 32], TransportError> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(TransportError::Unauthorized);
+    }
+    let mut decoded = [0_u8; 32];
+    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        decoded[index] = (decode_hex_nibble(pair[0])? << 4) | decode_hex_nibble(pair[1])?;
+    }
+    Ok(decoded)
+}
+
+fn decode_hex_nibble(value: u8) -> Result<u8, TransportError> {
+    match value {
+        b'0'..=b'9' => Ok(value - b'0'),
+        b'a'..=b'f' => Ok(value - b'a' + 10),
+        b'A'..=b'F' => Ok(value - b'A' + 10),
+        _ => Err(TransportError::Unauthorized),
+    }
+}
+
+fn encode_hex(value: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(digest.len() * 2);
-    for byte in digest {
+    let mut encoded = String::with_capacity(value.len() * 2);
+    for byte in value {
         encoded.push(HEX[usize::from(byte >> 4)] as char);
         encoded.push(HEX[usize::from(byte & 0x0f)] as char);
     }
     encoded
+}
+
+fn request_fingerprint(payload: &[u8]) -> String {
+    let digest = Sha256::digest(payload);
+    encode_hex(&digest)
 }
 
 #[cfg(test)]
@@ -670,6 +775,8 @@ mod tests {
     use crate::web_data_plane::{DataOperation, MAX_OPERATION_DEADLINE_MS};
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    const TEST_ATTESTATION_KEY: &[u8] = b"test-only-operation-attestation-key-32-bytes";
+
     struct FakeService;
 
     #[async_trait]
@@ -677,9 +784,18 @@ mod tests {
         async fn execute(
             &self,
             request: &AuthenticatedOperation,
-            _mode: WebApiMode,
+            mode: WebApiMode,
         ) -> Result<Value, TransportError> {
-            if request.authorization == "Bearer valid" && request.envelope.subject == "actor-1" {
+            let authenticated = match mode {
+                WebApiMode::JetStreamAsync => verify_operation_attestation(
+                    TEST_ATTESTATION_KEY,
+                    &request.envelope,
+                    &request.authorization,
+                )
+                .is_ok(),
+                _ => request.authorization == "Bearer valid",
+            };
+            if authenticated && request.envelope.subject == "actor-1" {
                 Ok(serde_json::json!({"configured": true}))
             } else {
                 Err(TransportError::Unauthorized)
@@ -709,23 +825,49 @@ mod tests {
 
     #[tokio::test]
     async fn every_tcp_and_jetstream_operation_is_authenticated() {
-        for mode in [WebApiMode::StatefulMtlsTcp, WebApiMode::JetStreamAsync] {
-            let valid = serde_json::to_vec(&request("Bearer valid")).expect("request");
-            let invalid = serde_json::to_vec(&request("Bearer invalid")).expect("request");
-            assert!(
-                process_payload(&FakeService, &valid, mode)
-                    .await
-                    .error
-                    .is_none()
-            );
-            assert_eq!(
-                process_payload(&FakeService, &invalid, mode)
-                    .await
-                    .error
-                    .as_deref(),
-                Some("unauthorized")
-            );
-        }
+        let valid_tcp = serde_json::to_vec(&request("Bearer valid")).expect("request");
+        let invalid_tcp = serde_json::to_vec(&request("Bearer invalid")).expect("request");
+        assert!(
+            process_payload(&FakeService, &valid_tcp, WebApiMode::StatefulMtlsTcp)
+                .await
+                .error
+                .is_none()
+        );
+        assert_eq!(
+            process_payload(&FakeService, &invalid_tcp, WebApiMode::StatefulMtlsTcp)
+                .await
+                .error
+                .as_deref(),
+            Some("unauthorized")
+        );
+
+        let mut valid_async = request("");
+        valid_async.authorization =
+            sign_operation_attestation(TEST_ATTESTATION_KEY, &valid_async.envelope)
+                .expect("attestation");
+        let mut invalid_async = valid_async.clone();
+        invalid_async.envelope.subject = "actor-2".to_string();
+        assert!(
+            process_payload(
+                &FakeService,
+                &serde_json::to_vec(&valid_async).expect("request"),
+                WebApiMode::JetStreamAsync,
+            )
+            .await
+            .error
+            .is_none()
+        );
+        assert_eq!(
+            process_payload(
+                &FakeService,
+                &serde_json::to_vec(&invalid_async).expect("request"),
+                WebApiMode::JetStreamAsync,
+            )
+            .await
+            .error
+            .as_deref(),
+            Some("unauthorized")
+        );
     }
 
     #[test]
@@ -741,6 +883,31 @@ mod tests {
             "{\"unexpected\":true,\"authorization\"",
         );
         assert!(serde_json::from_str::<AuthenticatedOperation>(&with_extra).is_err());
+    }
+
+    #[test]
+    fn operation_attestation_is_bound_to_every_envelope_field() {
+        let mut signed = request("");
+        signed.authorization = sign_operation_attestation(TEST_ATTESTATION_KEY, &signed.envelope)
+            .expect("attestation");
+        assert!(
+            verify_operation_attestation(
+                TEST_ATTESTATION_KEY,
+                &signed.envelope,
+                &signed.authorization,
+            )
+            .is_ok()
+        );
+        signed.envelope.operation = DataOperation::Write;
+        assert_eq!(
+            verify_operation_attestation(
+                TEST_ATTESTATION_KEY,
+                &signed.envelope,
+                &signed.authorization,
+            ),
+            Err(TransportError::Unauthorized)
+        );
+        assert!(!signed.authorization.contains("Bearer "));
     }
 
     #[test]

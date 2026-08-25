@@ -22,6 +22,7 @@ Configuration comes only from the process environment. Do not add `dotenv` or co
 | `PORT` | No | `8080` | HTTP listen port |
 | `NATS_URL` | No | `nats://localhost:4222` | NATS endpoint |
 | `ACT_OPERATION_DATABASE_URL` | For durable async operations | unset/closed | Dedicated Postgres journal with the reviewed inbox/status/outbox schema; enables JetStream only when Shared Auth and NATS are also available |
+| `ACT_NATS_OPERATION_HMAC_KEY` | With operation database | unset/closed | Runtime-injected, minimum 32-byte key for operation-bound web-to-API attestations; never publish or persist it |
 | `ACT_API_MTLS_ADDR` | For stateful TCP | unset/closed | Dedicated IP socket for the bounded mTLS operation listener |
 | `ACT_API_TLS_CERT_FILE` | With mTLS address | unset/closed | Server certificate chain injected at runtime |
 | `ACT_API_TLS_KEY_FILE` | With mTLS address | unset/closed | Server private key injected at runtime |
@@ -151,7 +152,7 @@ grep -RInE '^(<<<<<<<|=======|>>>>>>>)' --exclude-dir=.git .
 
 ## Security boundaries
 
-- The user token, Shared Auth service credential, and `YOUTUBE_GAS_API_KEY` are distinct credentials.
+- The user token, Shared Auth service credential, operation-attestation key, and `YOUTUBE_GAS_API_KEY` are distinct credentials.
 - No credential belongs in Git, logs, NATS, URLs, browser storage, or error responses.
 - The Rust API does not proxy GAS setup, API-key rotation, or configuration mutation actions.
 - NATS events include only action metadata and selected identifiers; they omit descriptions, email content, tokens, resumable session URLs, and API keys.
@@ -177,9 +178,13 @@ paths without treating them as interchangeable:
    exactly match the envelope subject.
 4. `jet_stream_async` requires a stable operation ID/deduplication key, durable
    consumer, explicit acknowledgements, bounded redelivery, acknowledgement
-   wait, and publish deadline. The live worker records a SHA-256 request
-   fingerprint (never the bearer or raw request), owner-scoped status, and
-   result outbox transactionally before acknowledging the request. It resumes
+   wait, and publish deadline. The web tier first verifies the caller with
+   Shared Auth, then signs the exact operation envelope with the separately
+   injected `ACT_NATS_OPERATION_HMAC_KEY`. The API verifies that short-lived,
+   operation-bound HMAC in constant time. Neither the caller bearer nor the key
+   enters NATS or the durable database. The live worker records a SHA-256
+   request fingerprint (never the raw request), owner-scoped status, and result
+   outbox transactionally before acknowledging the request. It resumes
    unpublished results after redelivery. Broker or journal
    unavailability remains fail-soft for the ordinary HTTP control plane and
    fail-closed for the async mode.

@@ -7,6 +7,7 @@ use act_api_server::{
     transport_runtime::{
         AuthenticatedOperation, JetStreamConfig, MAX_TCP_CONNECTIONS, OperationJournal,
         OperationService, SeaOrmOperationJournal, TransportError, serve_jetstream, serve_mtls_tcp,
+        verify_operation_attestation,
     },
     web_data_plane::{DataOperation, WebApiMode},
 };
@@ -58,10 +59,15 @@ async fn serve(cfg: config::Config) -> anyhow::Result<()> {
         })
         .transpose()?;
 
+    let operation_attestation_key = cfg
+        .operation_attestation_key
+        .as_deref()
+        .map(|key| Arc::<[u8]>::from(key.as_bytes()));
     let operation_service = shared_auth.as_ref().map(|shared_auth| {
         Arc::new(RuntimeOperationService {
             shared_auth: shared_auth.clone(),
             youtube: youtube.clone(),
+            operation_attestation_key: operation_attestation_key.clone(),
         }) as Arc<dyn OperationService>
     });
 
@@ -89,12 +95,21 @@ async fn serve(cfg: config::Config) -> anyhow::Result<()> {
                 let journal: Arc<dyn OperationJournal> =
                     Arc::new(SeaOrmOperationJournal::new(database));
                 operation_journal = Some(journal.clone());
-                if let (Some(client), Some(service)) = (nats.clone(), operation_service) {
+                if let (Some(client), Some(service), Some(attestation_key)) = (
+                    nats.clone(),
+                    operation_service,
+                    operation_attestation_key.clone(),
+                ) {
                     let context = async_nats::jetstream::new(client);
                     tokio::spawn(async move {
-                        if let Err(error) =
-                            serve_jetstream(context, service, journal, JetStreamConfig::default())
-                                .await
+                        if let Err(error) = serve_jetstream(
+                            context,
+                            service,
+                            journal,
+                            attestation_key,
+                            JetStreamConfig::default(),
+                        )
+                        .await
                         {
                             tracing::error!(error = %error, "durable JetStream worker stopped");
                         }
@@ -143,6 +158,7 @@ async fn serve(cfg: config::Config) -> anyhow::Result<()> {
 struct RuntimeOperationService {
     shared_auth: auth::SharedAuthVerifier,
     youtube: Option<youtube::YoutubeGasClient>,
+    operation_attestation_key: Option<Arc<[u8]>>,
 }
 
 #[async_trait]
@@ -150,26 +166,34 @@ impl OperationService for RuntimeOperationService {
     async fn execute(
         &self,
         request: &AuthenticatedOperation,
-        _mode: WebApiMode,
+        mode: WebApiMode,
     ) -> Result<Value, TransportError> {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&request.authorization)
-                .map_err(|_| TransportError::Unauthorized)?,
-        );
-        let subject = self
-            .shared_auth
-            .verify(&headers, &["youtube:admin"])
-            .await
-            .map_err(|failure| match failure {
-                auth::AuthFailure::Missing | auth::AuthFailure::Invalid => {
-                    TransportError::Unauthorized
-                }
-                auth::AuthFailure::Unavailable => TransportError::AuthUnavailable,
-            })?;
-        if subject.subject != request.envelope.subject {
-            return Err(TransportError::Unauthorized);
+        if mode == WebApiMode::JetStreamAsync {
+            let key = self
+                .operation_attestation_key
+                .as_deref()
+                .ok_or(TransportError::Unauthorized)?;
+            verify_operation_attestation(key, &request.envelope, &request.authorization)?;
+        } else {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                AUTHORIZATION,
+                HeaderValue::from_str(&request.authorization)
+                    .map_err(|_| TransportError::Unauthorized)?,
+            );
+            let subject = self
+                .shared_auth
+                .verify(&headers, &["youtube:admin"])
+                .await
+                .map_err(|failure| match failure {
+                    auth::AuthFailure::Missing | auth::AuthFailure::Invalid => {
+                        TransportError::Unauthorized
+                    }
+                    auth::AuthFailure::Unavailable => TransportError::AuthUnavailable,
+                })?;
+            if subject.subject != request.envelope.subject {
+                return Err(TransportError::Unauthorized);
+            }
         }
         if request.envelope.resource != "youtube_status"
             || request.envelope.operation != DataOperation::Read

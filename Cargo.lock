@@ -12,6 +12,7 @@ dependencies = [
  "axum",
  "axum-server",
  "futures",
+ "hmac",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
