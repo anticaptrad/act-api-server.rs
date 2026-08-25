@@ -1,4 +1,7 @@
 /target
+/.vendor/
+/.zed/
+/zed_modules/
 tmp
 temp
 tmp/worktrees

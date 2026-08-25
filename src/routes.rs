@@ -1,10 +1,7 @@
 //! HTTP surface for Kubernetes probes and the guarded YouTube control plane.
 
 use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicU64, Ordering},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -19,19 +16,20 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::{
-    auth::{AuthFailure, require_bearer},
+    auth::{AuthFailure, SharedAuthVerifier},
     nats,
     youtube::{YoutubeAction, YoutubeClientError, YoutubeGasClient, redact_map_for_audit},
 };
 
 const MAX_CONTROL_BODY_BYTES: usize = 1024 * 1024;
+const YOUTUBE_ADMIN_SCOPES: [&str; 1] = ["youtube:admin"];
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
 pub struct AppState {
     pub nats: Option<async_nats::Client>,
     pub youtube: Option<YoutubeGasClient>,
-    pub admin_api_key: Option<Arc<str>>,
+    pub shared_auth: Option<SharedAuthVerifier>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -62,7 +60,7 @@ async fn ready(State(state): State<AppState>) -> Json<Value> {
         "ready": true,
         "nats_connected": state.nats.is_some(),
         "youtube_configured": state.youtube.is_some(),
-        "admin_auth_configured": state.admin_api_key.is_some(),
+        "shared_auth_configured": state.shared_auth.is_some(),
     }))
 }
 
@@ -93,7 +91,7 @@ async fn youtube_status(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    authorize(&state, &headers)?;
+    authorize(&state, &headers).await?;
     let client = state
         .youtube
         .as_ref()
@@ -117,7 +115,7 @@ async fn youtube_action(
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
-    authorize(&state, &headers)?;
+    authorize(&state, &headers).await?;
     let action = YoutubeAction::parse(&action_name).ok_or_else(|| ApiError {
         status: StatusCode::NOT_FOUND,
         code: "UNKNOWN_YOUTUBE_ACTION",
@@ -198,24 +196,34 @@ async fn youtube_action(
     }
 }
 
-fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
-    require_bearer(headers, state.admin_api_key.as_deref()).map_err(|failure| match failure {
-        AuthFailure::NotConfigured => ApiError {
-            status: StatusCode::SERVICE_UNAVAILABLE,
-            code: "ADMIN_AUTH_NOT_CONFIGURED",
-            message: "ADMIN_API_KEY is not configured; administrative routes are closed"
-                .to_string(),
-            details: None,
-            request_id: None,
-        },
-        AuthFailure::Missing | AuthFailure::Invalid => ApiError {
-            status: StatusCode::UNAUTHORIZED,
-            code: "UNAUTHORIZED",
-            message: "a valid Authorization: Bearer credential is required".to_string(),
-            details: None,
-            request_id: None,
-        },
-    })
+async fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
+    let verifier = state.shared_auth.as_ref().ok_or_else(|| ApiError {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        code: "SHARED_AUTH_NOT_CONFIGURED",
+        message: "Shared Auth is not configured; protected routes are closed".to_string(),
+        details: None,
+        request_id: None,
+    })?;
+    verifier
+        .verify(headers, &YOUTUBE_ADMIN_SCOPES)
+        .await
+        .map(|_| ())
+        .map_err(|failure| match failure {
+            AuthFailure::Missing | AuthFailure::Invalid => ApiError {
+                status: StatusCode::UNAUTHORIZED,
+                code: "UNAUTHORIZED",
+                message: "a valid delegated Shared Auth bearer is required".to_string(),
+                details: None,
+                request_id: None,
+            },
+            AuthFailure::Unavailable => ApiError {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                code: "SHARED_AUTH_UNAVAILABLE",
+                message: "Shared Auth verification is unavailable".to_string(),
+                details: None,
+                request_id: None,
+            },
+        })
 }
 
 fn header_string(headers: &HeaderMap, name: &'static str) -> Result<Option<String>, ApiError> {
@@ -319,33 +327,18 @@ impl IntoResponse for ApiError {
 
 #[cfg(test)]
 mod tests {
-    use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
+    use axum::http::HeaderMap;
 
     use super::{AppState, authorize, request_id};
 
-    #[test]
-    fn administrative_routes_fail_closed() {
+    #[tokio::test]
+    async fn administrative_routes_fail_closed() {
         let state = AppState {
             nats: None,
             youtube: None,
-            admin_api_key: None,
+            shared_auth: None,
         };
-        assert!(authorize(&state, &HeaderMap::new()).is_err());
-    }
-
-    #[test]
-    fn administrative_routes_accept_configured_key() {
-        let state = AppState {
-            nats: None,
-            youtube: None,
-            admin_api_key: Some("a-very-long-administrative-api-key".into()),
-        };
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_static("Bearer a-very-long-administrative-api-key"),
-        );
-        assert!(authorize(&state, &headers).is_ok());
+        assert!(authorize(&state, &HeaderMap::new()).await.is_err());
     }
 
     #[test]

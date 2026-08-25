@@ -1,88 +1,143 @@
-//! Authentication helpers for the administrative HTTP surface.
+//! Fail-closed Shared Auth verification for protected API routes.
 //!
-//! The Rust API never accepts or returns the Apps Script API key. Callers use a
-//! separate `ADMIN_API_KEY`, while the server injects `YOUTUBE_GAS_API_KEY`
-//! only into the outbound request body.
+//! The caller's bearer is introspected through the official client. The
+//! independent service credential is attached only to that server-to-server
+//! request and is never forwarded, returned, or logged.
+
+use std::sync::Arc;
 
 use axum::http::{HeaderMap, header::AUTHORIZATION};
+use shared_auth_client::{ClientError, SharedAuthClient};
+
+const MAX_INTROSPECTION_RESPONSE_BYTES: usize = 64 * 1024;
+
+#[derive(Clone)]
+pub struct SharedAuthVerifier {
+    client: SharedAuthClient,
+    audience: Arc<str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthSubject {
+    pub subject: String,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthFailure {
-    NotConfigured,
     Missing,
     Invalid,
+    Unavailable,
 }
 
-pub fn require_bearer(headers: &HeaderMap, expected: Option<&str>) -> Result<(), AuthFailure> {
-    let expected = expected.ok_or(AuthFailure::NotConfigured)?;
+impl SharedAuthVerifier {
+    pub fn new(
+        base_url: impl Into<String>,
+        service_credential: impl Into<String>,
+        audience: impl Into<String>,
+    ) -> Result<Self, ClientError> {
+        let client = SharedAuthClient::try_new(base_url)?
+            .with_service_credential(service_credential)
+            .with_max_response_bytes(MAX_INTROSPECTION_RESPONSE_BYTES);
+        Ok(Self {
+            client,
+            audience: Arc::from(audience.into()),
+        })
+    }
+
+    pub async fn verify(
+        &self,
+        headers: &HeaderMap,
+        required_scopes: &[&str],
+    ) -> Result<AuthSubject, AuthFailure> {
+        let token = bearer_token(headers)?;
+        let claims = self
+            .client
+            .introspect_with_requirements(token, &self.audience, required_scopes)
+            .await
+            .map_err(map_client_error)?;
+
+        if !claims.active || claims.aud.as_deref() != Some(self.audience.as_ref()) {
+            return Err(AuthFailure::Invalid);
+        }
+        let subject = claims
+            .sub
+            .filter(|value| !value.trim().is_empty())
+            .ok_or(AuthFailure::Invalid)?;
+        Ok(AuthSubject { subject })
+    }
+}
+
+fn bearer_token(headers: &HeaderMap) -> Result<&str, AuthFailure> {
     let raw = headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .ok_or(AuthFailure::Missing)?;
-    let (scheme, provided) = raw.split_once(' ').ok_or(AuthFailure::Invalid)?;
-    if !scheme.eq_ignore_ascii_case("Bearer") || provided.is_empty() {
+    let (scheme, token) = raw.split_once(' ').ok_or(AuthFailure::Invalid)?;
+    if !scheme.eq_ignore_ascii_case("Bearer")
+        || token.is_empty()
+        || token.trim() != token
+        || token.chars().any(char::is_whitespace)
+    {
         return Err(AuthFailure::Invalid);
     }
-    if constant_time_equals(provided.as_bytes(), expected.as_bytes()) {
-        Ok(())
-    } else {
-        Err(AuthFailure::Invalid)
-    }
+    Ok(token)
 }
 
-fn constant_time_equals(left: &[u8], right: &[u8]) -> bool {
-    let max_len = left.len().max(right.len());
-    let mut difference = left.len() ^ right.len();
-    for index in 0..max_len {
-        let left_byte = left.get(index).copied().unwrap_or_default();
-        let right_byte = right.get(index).copied().unwrap_or_default();
-        difference |= usize::from(left_byte ^ right_byte);
+fn map_client_error(error: ClientError) -> AuthFailure {
+    match error {
+        ClientError::Unauthorized | ClientError::InvalidInput(_) => AuthFailure::Invalid,
+        ClientError::MissingServiceCredential
+        | ClientError::InvalidBaseUrl
+        | ClientError::RequestTooLarge { .. }
+        | ClientError::ResponseTooLarge { .. }
+        | ClientError::Encode { .. }
+        | ClientError::Decode { .. }
+        | ClientError::Transport(_)
+        | ClientError::Status(_)
+        | ClientError::InsecureTransport(_) => AuthFailure::Unavailable,
     }
-    difference == 0
 }
 
 #[cfg(test)]
 mod tests {
     use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
 
-    use super::{AuthFailure, constant_time_equals, require_bearer};
+    use super::{AuthFailure, SharedAuthVerifier, bearer_token};
 
     #[test]
-    fn validates_bearer_header() {
+    fn bearer_parser_accepts_one_opaque_token() {
         let mut headers = HeaderMap::new();
         headers.insert(
             AUTHORIZATION,
-            HeaderValue::from_static("Bearer this-is-a-long-administrative-api-key"),
+            HeaderValue::from_static("Bearer opaque-product-token"),
         );
-        assert_eq!(
-            require_bearer(&headers, Some("this-is-a-long-administrative-api-key")),
-            Ok(())
-        );
+        assert_eq!(bearer_token(&headers), Ok("opaque-product-token"));
     }
 
     #[test]
-    fn rejects_missing_or_incorrect_credentials() {
-        assert_eq!(
-            require_bearer(&HeaderMap::new(), None),
-            Err(AuthFailure::NotConfigured)
-        );
-        assert_eq!(
-            require_bearer(&HeaderMap::new(), Some("expected")),
-            Err(AuthFailure::Missing)
-        );
-
-        let mut headers = HeaderMap::new();
-        headers.insert(AUTHORIZATION, HeaderValue::from_static("Basic expected"));
-        assert_eq!(
-            require_bearer(&headers, Some("expected")),
-            Err(AuthFailure::Invalid)
-        );
+    fn bearer_parser_rejects_missing_malformed_or_ambiguous_values() {
+        assert_eq!(bearer_token(&HeaderMap::new()), Err(AuthFailure::Missing));
+        for value in [
+            "Basic token",
+            "Bearer",
+            "Bearer token extra",
+            "Bearer  token",
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(AUTHORIZATION, HeaderValue::from_str(value).unwrap());
+            assert_eq!(bearer_token(&headers), Err(AuthFailure::Invalid));
+        }
     }
 
     #[test]
-    fn constant_time_comparison_checks_length_and_content() {
-        assert!(constant_time_equals(b"same", b"same"));
-        assert!(!constant_time_equals(b"same", b"different"));
-        assert!(!constant_time_equals(b"prefix", b"prefix-extra"));
+    fn verifier_rejects_public_cleartext_auth_hosts_at_startup() {
+        assert!(
+            SharedAuthVerifier::new(
+                "http://auth.example.test",
+                "independent-service-credential",
+                "act-api"
+            )
+            .is_err()
+        );
     }
 }

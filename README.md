@@ -7,6 +7,8 @@ HTTP API, NATS bridge, and guarded YouTube control plane for the AntiCapTrad pla
 - Serves Kubernetes liveness and readiness probes.
 - Connects to NATS without making broker availability a hard startup dependency.
 - Exports traces through OTLP when configured.
+- Emits Ores structured records through the existing tracing/OTLP pipeline.
+- Introspects delegated product tokens through the official Shared Auth client.
 - Calls the Anticaptrad Google Apps Script YouTube web app through a server-side API key.
 - Keeps uploads private until a separate, exact-phrase publication request is approved.
 - Emits redacted YouTube action lifecycle events to NATS.
@@ -21,7 +23,8 @@ Configuration comes only from the process environment. Do not add `dotenv` or co
 | `NATS_URL` | No | `nats://localhost:4222` | NATS endpoint |
 | `OTEL_SERVICE_NAME` | No | `act-api-server` | OpenTelemetry service name |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | unset | OTLP collector endpoint |
-| `ADMIN_API_KEY` | For admin routes | unset/closed | Separate bearer key used by callers of the Rust API; minimum 32 characters |
+| `SHARED_AUTH_URL` | For protected routes | unset/closed | Shared Auth base URL; public cleartext HTTP is rejected |
+| `SHARED_AUTH_SERVICE_CREDENTIAL` | With Shared Auth URL | unset/closed | Independent service bearer used only for protected introspection |
 | `YOUTUBE_GAS_URL` | For YouTube routes | unset | Deployed `https://script.google.com/macros/s/.../exec` URL |
 | `YOUTUBE_GAS_API_KEY` | With GAS URL | unset | API key generated inside the GAS dashboard; minimum 32 characters |
 | `YOUTUBE_EXPECTED_CHANNEL_HANDLE` | No | `@anticaptrad` | Channel identity expected by operators |
@@ -29,7 +32,12 @@ Configuration comes only from the process environment. Do not add `dotenv` or co
 | `YOUTUBE_GAS_MAX_RESPONSE_BYTES` | No | `4194304` | Response cap, bounded to 1 KiB–16 MiB |
 | `YOUTUBE_ALLOW_PUBLIC_ACTIONS` | No | `false` | Defense-in-depth switch for public/unlisted publication |
 
-When one of `YOUTUBE_GAS_URL` or `YOUTUBE_GAS_API_KEY` is set, both must be set. Invalid or non-Google URLs fail startup instead of silently weakening security.
+When one of `YOUTUBE_GAS_URL` or `YOUTUBE_GAS_API_KEY` is set, both must be set and Shared Auth must also be configured. Invalid or non-Google URLs fail startup instead of silently weakening security.
+
+Protected routes require a delegated Shared Auth token for audience `act-api`
+and scope `youtube:admin`. The service credential authenticates the API server
+to the introspection endpoint; it is not the user's token and is never
+forwarded to Apps Script.
 
 ## GAS deployment requirement
 
@@ -64,7 +72,7 @@ curl --fail-with-body http://localhost:8080/v1/youtube/health
 
 ```bash
 curl --fail-with-body \
-  -H "Authorization: Bearer $ADMIN_API_KEY" \
+  -H "Authorization: Bearer $PRODUCT_ACCESS_TOKEN" \
   http://localhost:8080/v1/youtube/status
 ```
 
@@ -74,7 +82,7 @@ The response confirms that keys are present but never returns either key or the 
 
 ```bash
 curl --fail-with-body \
-  -H "Authorization: Bearer $ADMIN_API_KEY" \
+  -H "Authorization: Bearer $PRODUCT_ACCESS_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{}' \
   http://localhost:8080/v1/youtube/actions/channel
@@ -88,7 +96,7 @@ Every mutating action requires an `Idempotency-Key`. The Rust server injects the
 
 ```bash
 curl --fail-with-body \
-  -H "Authorization: Bearer $ADMIN_API_KEY" \
+  -H "Authorization: Bearer $PRODUCT_ACCESS_TOKEN" \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: production-2026-07-27-video-001' \
   -d '{
@@ -112,7 +120,7 @@ Both the Rust switch and the GAS dashboard switch must permit public actions. Th
 
 ```bash
 curl --fail-with-body \
-  -H "Authorization: Bearer $ADMIN_API_KEY" \
+  -H "Authorization: Bearer $PRODUCT_ACCESS_TOKEN" \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: publish-VIDEO_ID-public-v1' \
   -d '{
@@ -131,16 +139,39 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
 cargo build --release
 
+/path/to/zed validate
+
 grep -RInE '^(<<<<<<<|=======|>>>>>>>)' --exclude-dir=.git .
 ```
 
 ## Security boundaries
 
-- `ADMIN_API_KEY` and `YOUTUBE_GAS_API_KEY` must be different secrets.
-- Neither key belongs in Git, logs, NATS, URLs, browser storage, or error responses.
+- The user token, Shared Auth service credential, and `YOUTUBE_GAS_API_KEY` are distinct credentials.
+- No credential belongs in Git, logs, NATS, URLs, browser storage, or error responses.
 - The Rust API does not proxy GAS setup, API-key rotation, or configuration mutation actions.
 - NATS events include only action metadata and selected identifiers; they omit descriptions, email content, tokens, resumable session URLs, and API keys.
 - Public and unlisted actions remain disabled unless `YOUTUBE_ALLOW_PUBLIC_ACTIONS=true` and the GAS dashboard independently permits them.
+
+## Web-to-API interaction modes
+
+The public Rust contract in `src/web_data_plane.rs` supports four explicit
+paths without treating them as interchangeable:
+
+1. `direct_read_only_database` builds only actor-scoped, parameterized SeaORM
+   `SELECT` statements and requires a separately provisioned `_web_ro` role, a
+   read-only transaction, a statement deadline, and a row cap. It rejects every
+   write operation.
+2. `stateless_http` requires HTTPS except for an explicit in-cluster service
+   address, disables redirects, keeps a separate service-credential reference,
+   and bounds connection time, request time, and response bytes.
+3. `stateful_mtls_tcp` requires certificate/key references and mutual TLS. Each
+   operation is a strict four-byte length-prefixed frame with a size and
+   deadline cap; the API must authenticate every operation rather than trusting
+   connection age.
+4. `jet_stream_async` requires a stable operation ID/deduplication key, durable
+   consumer, explicit acknowledgements, bounded redelivery, acknowledgement
+   wait, and publish deadline. Broker unavailability remains fail-soft for the
+   ordinary HTTP control plane.
 
 ## Environment secrets
 

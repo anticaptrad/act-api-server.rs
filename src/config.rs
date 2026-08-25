@@ -16,8 +16,15 @@ pub struct Config {
     pub port: u16,
     pub nats_url: String,
     pub service_name: String,
-    pub admin_api_key: Option<String>,
+    pub shared_auth: Option<SharedAuthConfig>,
     pub youtube: Option<YoutubeConfig>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SharedAuthConfig {
+    pub base_url: String,
+    pub service_credential: String,
+    pub audience: String,
 }
 
 #[derive(Debug, Clone)]
@@ -38,12 +45,28 @@ impl Config {
         let service_name =
             env_non_empty("OTEL_SERVICE_NAME").unwrap_or_else(|| "act-api-server".to_string());
 
-        let admin_api_key = env_non_empty("ADMIN_API_KEY");
-        if let Some(key) = admin_api_key.as_deref() {
-            if key.len() < 32 {
-                bail!("ADMIN_API_KEY must be at least 32 characters when configured");
+        let shared_auth_url = env_non_empty("SHARED_AUTH_URL");
+        let shared_auth_service_credential = env_non_empty("SHARED_AUTH_SERVICE_CREDENTIAL");
+        let shared_auth = match (shared_auth_url, shared_auth_service_credential) {
+            (None, None) => None,
+            (None, Some(_)) => {
+                bail!("SHARED_AUTH_SERVICE_CREDENTIAL is set but SHARED_AUTH_URL is missing")
             }
-        }
+            (Some(_), None) => {
+                bail!("SHARED_AUTH_URL is set but SHARED_AUTH_SERVICE_CREDENTIAL is missing")
+            }
+            (Some(base_url), Some(service_credential)) => {
+                if service_credential.len() < 16 || service_credential.chars().any(char::is_control)
+                {
+                    bail!("SHARED_AUTH_SERVICE_CREDENTIAL is not a valid service bearer")
+                }
+                Some(SharedAuthConfig {
+                    base_url,
+                    service_credential,
+                    audience: "act-api".to_string(),
+                })
+            }
+        };
 
         let gas_url = env_non_empty("YOUTUBE_GAS_URL");
         let gas_api_key = env_non_empty("YOUTUBE_GAS_API_KEY");
@@ -89,24 +112,24 @@ impl Config {
             }
         };
 
-        validate_admin_configuration(admin_api_key.as_deref(), youtube.is_some())?;
+        validate_auth_configuration(shared_auth.is_some(), youtube.is_some())?;
 
         Ok(Self {
             port,
             nats_url,
             service_name,
-            admin_api_key,
+            shared_auth,
             youtube,
         })
     }
 }
 
-fn validate_admin_configuration(
-    admin_api_key: Option<&str>,
+fn validate_auth_configuration(
+    shared_auth_enabled: bool,
     youtube_enabled: bool,
 ) -> anyhow::Result<()> {
-    if youtube_enabled && admin_api_key.is_none() {
-        bail!("ADMIN_API_KEY is required whenever the YouTube GAS control plane is configured");
+    if youtube_enabled && !shared_auth_enabled {
+        bail!("Shared Auth is required whenever the YouTube GAS control plane is configured");
     }
     Ok(())
 }
@@ -164,7 +187,7 @@ fn parse_apps_script_url(raw: &str) -> anyhow::Result<Url> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_apps_script_url, validate_admin_configuration};
+    use super::{parse_apps_script_url, validate_auth_configuration};
 
     #[test]
     fn accepts_deployed_apps_script_url() {
@@ -188,9 +211,9 @@ mod tests {
     }
 
     #[test]
-    fn youtube_configuration_requires_separate_admin_key() {
-        assert!(validate_admin_configuration(None, true).is_err());
-        assert!(validate_admin_configuration(Some("configured"), true).is_ok());
-        assert!(validate_admin_configuration(None, false).is_ok());
+    fn youtube_configuration_requires_shared_auth() {
+        assert!(validate_auth_configuration(false, true).is_err());
+        assert!(validate_auth_configuration(true, true).is_ok());
+        assert!(validate_auth_configuration(false, false).is_ok());
     }
 }
