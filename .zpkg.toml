@@ -1,0 +1,45 @@
+[package]
+org = "anticaptrad"
+name = "act-api-server"
+version = "0.1.0"
+description = "Anticaptrad api-server.rs with lib-core and orm-core"
+license = "UNLICENSED"
+keywords = ["admin", "vpc", "shared-auth", "zed-pkg", "seaorm"]
+
+[package.repository]
+vcs = "git"
+url = "https://github.com/anticaptrad/act-api-server.rs"
+
+[install]
+dir = ".vendor/.zed"
+
+[dependencies]
+"anticaptrad/act-lib-core" = "^0.1.0"
+"anticaptrad/act-orm-core" = "^0.1.0"
+"shared-auth/shared-auth-clients" = "^0.1.0"
+"oresoftware/next-loggers-rust" = "^0.1.0"
+"oresoftware/k8s-libs-and-shared-defs" = "^0.1.0"
+
+[publish]
+include_readme = true
+tag_format = "v{version}"
+exclude = [
+  ".env",
+  ".env.*",
+  ".direnv/**",
+  ".vendor/.zed/**",
+  ".zed/**",
+  "target/**",
+  "**/target/**",
+  "**/node_modules/**",
+  "tmp/**",
+  "**/*.log",
+]
+
+[targets.rust]
+dir = "."
+adapter = "rust"
+
+
+[scripts]
+test = "cargo test --locked --all-targets"
