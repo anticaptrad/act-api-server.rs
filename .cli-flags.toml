@@ -1,0 +1,110 @@
+[identity]
+service = "act-api-server"
+type_name = "RuntimeEnv"
+
+[help]
+url = "https://github.com/flags-2-env/flags-2-env"
+columns = ["options", "env", "type", "default", "description"]
+
+[parse]
+allow_unknown = false
+
+[env]
+ignore = ["ACT_API_CLIENT_CA_FILE", "ACT_API_TLS_CERT_FILE", "ACT_API_TLS_KEY_FILE", "ACT_NATS_OPERATION_HMAC_KEY", "ACT_OPERATION_DATABASE_URL", "NATS_URL", "SHARED_AUTH_SERVICE_CREDENTIAL", "YOUTUBE_GAS_API_KEY"]
+
+[flags.help]
+env = "CLI_HELP_REQUESTED"
+long = "help"
+short = "h"
+type = "boolean"
+default = false
+help = "Print command-line help."
+
+[flags.version]
+env = "CLI_VERSION_REQUESTED"
+long = "version"
+short = "V"
+type = "boolean"
+default = false
+help = "Print the server version."
+
+[flags.port]
+env = "PORT"
+long = "port"
+short = "p"
+type = "integer"
+default = 8080
+help = "HTTP listener port."
+
+[flags.service-name]
+env = "OTEL_SERVICE_NAME"
+long = "service-name"
+type = "string"
+default = "act-api-server"
+help = "OpenTelemetry service name."
+
+[flags.shared-auth-url]
+env = "SHARED_AUTH_URL"
+long = "shared-auth-url"
+type = "string"
+help = "Credential-free Shared Auth base URL."
+
+[flags.youtube-gas-url]
+env = "YOUTUBE_GAS_URL"
+long = "youtube-gas-url"
+type = "string"
+help = "Credential-free deployed Google Apps Script URL."
+
+[flags.youtube-channel]
+env = "YOUTUBE_EXPECTED_CHANNEL_HANDLE"
+long = "youtube-channel"
+type = "string"
+default = "@anticaptrad"
+help = "Expected YouTube channel handle."
+
+[flags.youtube-timeout-secs]
+env = "YOUTUBE_GAS_TIMEOUT_SECS"
+long = "youtube-timeout-secs"
+type = "integer"
+default = 30
+help = "YouTube control-plane timeout in seconds."
+
+[flags.youtube-max-response-bytes]
+env = "YOUTUBE_GAS_MAX_RESPONSE_BYTES"
+long = "youtube-max-response-bytes"
+type = "integer"
+default = 4194304
+help = "Maximum YouTube response size."
+
+[flags.youtube-allow-public-actions]
+env = "YOUTUBE_ALLOW_PUBLIC_ACTIONS"
+long = "youtube-allow-public-actions"
+type = "boolean"
+default = false
+help = "Allow reviewed public YouTube actions."
+
+[flags.mtls-addr]
+env = "ACT_API_MTLS_ADDR"
+long = "mtls-addr"
+type = "string"
+help = "Optional mTLS operation listener address."
+
+[flags.otel-endpoint]
+env = "OTEL_EXPORTER_OTLP_ENDPOINT"
+long = "otel-endpoint"
+type = "string"
+help = "Credential-free OTLP endpoint."
+
+[flags.rust-log]
+env = "RUST_LOG"
+long = "rust-log"
+type = "string"
+default = "info,act_api_server=debug"
+help = "Tracing filter."
+
+[flags.shutdown-grace-ms]
+env = "SHUTDOWN_GRACE_MS"
+long = "shutdown-grace-ms"
+type = "integer"
+default = 10000
+help = "Graceful shutdown deadline in milliseconds."
