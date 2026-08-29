@@ -5,6 +5,7 @@
 
 mod auth;
 mod config;
+mod flags;
 mod nats;
 mod routes;
 mod server;
@@ -13,5 +14,9 @@ mod youtube;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if let Some(output) = flags::process_control().map_err(std::io::Error::other)? {
+        print!("{output}");
+        return Ok(());
+    }
     server::run().await
 }
