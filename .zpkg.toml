@@ -12,6 +12,7 @@ vcs = "git"
 url = "https://github.com/anticaptrad/act-api-server.rs"
 
 [dependencies]
+"anticaptrad/act-orm-core" = "^0.1.0"
 "anticaptrad/act-interfaces" = "^0.1.0"
 "anticaptrad/act-lib-core" = "^0.1.0"
 "shared-auth/shared-auth-clients" = "^0.1.0"
