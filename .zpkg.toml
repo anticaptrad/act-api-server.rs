@@ -1,0 +1,39 @@
+[package]
+org = "anticaptrad"
+name = "act-api-server-rs"
+version = "0.2.0"
+description = "Shared Auth protected AntiCapTrad API with four bounded web data paths"
+license = "MIT"
+keywords = ["anticaptrad", "api", "rust", "seaorm", "nats", "shared-auth"]
+language = "rust"
+
+[package.repository]
+vcs = "git"
+url = "https://github.com/anticaptrad/act-api-server.rs"
+
+[dependencies]
+"anticaptrad/act-interfaces" = "^0.1.0"
+"anticaptrad/act-lib-core" = "^0.1.0"
+"shared-auth/shared-auth-clients" = "^0.1.0"
+"oresoftware/next-loggers" = "^0.1.0"
+
+[build]
+command = "cargo build --release --locked"
+outputs = ["target/release/act_api_server"]
+
+[install]
+adapter = "none"
+dir = ".vendor/.zed"
+
+[publish]
+include_readme = true
+tag_format = "v{version}"
+smoke_test = "cargo test --all-targets --locked"
+exclude = [".env", ".env.*", ".vendor/**", ".zed/**", "target/**", "**/*.log"]
+
+[targets.rust]
+dir = "."
+adapter = "rust"
+
+[scripts]
+test = "cargo test --all-targets --locked"

@@ -286,22 +286,22 @@ fn prepare_payload(
                     "startUpload requires rightsConfirmed=true".to_string(),
                 ));
             }
-            if let Some(status) = optional_string(&object, "privacyStatus")? {
-                if status != "private" {
-                    return Err(YoutubeClientError::Validation(
-                        "startUpload must remain private; publish in a separate approved action"
-                            .to_string(),
-                    ));
-                }
+            if let Some(status) = optional_string(&object, "privacyStatus")?
+                && status != "private"
+            {
+                return Err(YoutubeClientError::Validation(
+                    "startUpload must remain private; publish in a separate approved action"
+                        .to_string(),
+                ));
             }
 
             let header_key = idempotency_key.expect("mutating actions already require a key");
-            if let Some(existing) = optional_string(&object, "idempotencyKey")? {
-                if existing != header_key {
-                    return Err(YoutubeClientError::Validation(
-                        "body idempotencyKey must match the Idempotency-Key header".to_string(),
-                    ));
-                }
+            if let Some(existing) = optional_string(&object, "idempotencyKey")?
+                && existing != header_key
+            {
+                return Err(YoutubeClientError::Validation(
+                    "body idempotencyKey must match the Idempotency-Key header".to_string(),
+                ));
             }
             object.insert(
                 "idempotencyKey".to_string(),

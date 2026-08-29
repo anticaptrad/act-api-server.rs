@@ -16,8 +16,26 @@ pub struct Config {
     pub port: u16,
     pub nats_url: String,
     pub service_name: String,
-    pub admin_api_key: Option<String>,
+    pub shared_auth: Option<SharedAuthConfig>,
     pub youtube: Option<YoutubeConfig>,
+    pub operation_database_url: Option<String>,
+    pub operation_attestation_key: Option<String>,
+    pub mtls: Option<MtlsConfig>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SharedAuthConfig {
+    pub base_url: String,
+    pub service_credential: String,
+    pub audience: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct MtlsConfig {
+    pub address: String,
+    pub certificate_file: String,
+    pub private_key_file: String,
+    pub client_ca_file: String,
 }
 
 #[derive(Debug, Clone)]
@@ -38,12 +56,28 @@ impl Config {
         let service_name =
             env_non_empty("OTEL_SERVICE_NAME").unwrap_or_else(|| "act-api-server".to_string());
 
-        let admin_api_key = env_non_empty("ADMIN_API_KEY");
-        if let Some(key) = admin_api_key.as_deref() {
-            if key.len() < 32 {
-                bail!("ADMIN_API_KEY must be at least 32 characters when configured");
+        let shared_auth_url = env_non_empty("SHARED_AUTH_URL");
+        let shared_auth_service_credential = env_non_empty("SHARED_AUTH_SERVICE_CREDENTIAL");
+        let shared_auth = match (shared_auth_url, shared_auth_service_credential) {
+            (None, None) => None,
+            (None, Some(_)) => {
+                bail!("SHARED_AUTH_SERVICE_CREDENTIAL is set but SHARED_AUTH_URL is missing")
             }
-        }
+            (Some(_), None) => {
+                bail!("SHARED_AUTH_URL is set but SHARED_AUTH_SERVICE_CREDENTIAL is missing")
+            }
+            (Some(base_url), Some(service_credential)) => {
+                if service_credential.len() < 16 || service_credential.chars().any(char::is_control)
+                {
+                    bail!("SHARED_AUTH_SERVICE_CREDENTIAL is not a valid service bearer")
+                }
+                Some(SharedAuthConfig {
+                    base_url,
+                    service_credential,
+                    audience: "act-api".to_string(),
+                })
+            }
+        };
 
         let gas_url = env_non_empty("YOUTUBE_GAS_URL");
         let gas_api_key = env_non_empty("YOUTUBE_GAS_API_KEY");
@@ -89,24 +123,105 @@ impl Config {
             }
         };
 
-        validate_admin_configuration(admin_api_key.as_deref(), youtube.is_some())?;
+        validate_auth_configuration(shared_auth.is_some(), youtube.is_some())?;
+        let operation_database_url = env_non_empty("ACT_OPERATION_DATABASE_URL");
+        let operation_attestation_key = env_non_empty("ACT_NATS_OPERATION_HMAC_KEY");
+        validate_operation_configuration(
+            operation_database_url.is_some(),
+            operation_attestation_key.as_deref(),
+        )?;
+        if operation_database_url.is_some() {
+            validate_durable_nats_url(&nats_url)?;
+            if shared_auth.is_none() {
+                bail!("Shared Auth is required whenever durable JetStream is configured");
+            }
+        }
+        let mtls = parse_mtls_config()?;
+        if mtls.is_some() && shared_auth.is_none() {
+            bail!("Shared Auth is required whenever the mTLS operation listener is configured");
+        }
 
         Ok(Self {
             port,
             nats_url,
             service_name,
-            admin_api_key,
+            shared_auth,
             youtube,
+            operation_database_url,
+            operation_attestation_key,
+            mtls,
         })
     }
 }
 
-fn validate_admin_configuration(
-    admin_api_key: Option<&str>,
+fn parse_mtls_config() -> anyhow::Result<Option<MtlsConfig>> {
+    let values = [
+        env_non_empty("ACT_API_MTLS_ADDR"),
+        env_non_empty("ACT_API_TLS_CERT_FILE"),
+        env_non_empty("ACT_API_TLS_KEY_FILE"),
+        env_non_empty("ACT_API_CLIENT_CA_FILE"),
+    ];
+    if values.iter().all(Option::is_none) {
+        return Ok(None);
+    }
+    let [
+        Some(address),
+        Some(certificate_file),
+        Some(private_key_file),
+        Some(client_ca_file),
+    ] = values
+    else {
+        bail!("all ACT_API_MTLS_ADDR and ACT_API_* TLS file variables are required together")
+    };
+    address
+        .parse::<std::net::SocketAddr>()
+        .context("ACT_API_MTLS_ADDR must be an IP socket address")?;
+    Ok(Some(MtlsConfig {
+        address,
+        certificate_file,
+        private_key_file,
+        client_ca_file,
+    }))
+}
+
+fn validate_durable_nats_url(value: &str) -> anyhow::Result<()> {
+    let allowed = value.starts_with("tls://")
+        || value.starts_with("nats://127.0.0.1")
+        || value.starts_with("nats://localhost")
+        || value.starts_with("nats://[::1]");
+    if !allowed {
+        bail!("durable JetStream requires TLS outside explicit loopback development")
+    }
+    Ok(())
+}
+
+fn validate_operation_configuration(
+    database_enabled: bool,
+    attestation_key: Option<&str>,
+) -> anyhow::Result<()> {
+    match (database_enabled, attestation_key) {
+        (false, None) => Ok(()),
+        (true, None) => {
+            bail!("ACT_NATS_OPERATION_HMAC_KEY is required for durable JetStream operations")
+        }
+        (false, Some(_)) => {
+            bail!("ACT_OPERATION_DATABASE_URL is required with ACT_NATS_OPERATION_HMAC_KEY")
+        }
+        (true, Some(key)) => {
+            if key.len() < 32 || key.chars().any(char::is_control) {
+                bail!("ACT_NATS_OPERATION_HMAC_KEY must contain at least 32 non-control bytes")
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_auth_configuration(
+    shared_auth_enabled: bool,
     youtube_enabled: bool,
 ) -> anyhow::Result<()> {
-    if youtube_enabled && admin_api_key.is_none() {
-        bail!("ADMIN_API_KEY is required whenever the YouTube GAS control plane is configured");
+    if youtube_enabled && !shared_auth_enabled {
+        bail!("Shared Auth is required whenever the YouTube GAS control plane is configured");
     }
     Ok(())
 }
@@ -164,7 +279,10 @@ fn parse_apps_script_url(raw: &str) -> anyhow::Result<Url> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_apps_script_url, validate_admin_configuration};
+    use super::{
+        parse_apps_script_url, validate_auth_configuration, validate_durable_nats_url,
+        validate_operation_configuration,
+    };
 
     #[test]
     fn accepts_deployed_apps_script_url() {
@@ -188,9 +306,25 @@ mod tests {
     }
 
     #[test]
-    fn youtube_configuration_requires_separate_admin_key() {
-        assert!(validate_admin_configuration(None, true).is_err());
-        assert!(validate_admin_configuration(Some("configured"), true).is_ok());
-        assert!(validate_admin_configuration(None, false).is_ok());
+    fn youtube_configuration_requires_shared_auth() {
+        assert!(validate_auth_configuration(false, true).is_err());
+        assert!(validate_auth_configuration(true, true).is_ok());
+        assert!(validate_auth_configuration(false, false).is_ok());
+    }
+
+    #[test]
+    fn durable_nats_rejects_remote_cleartext() {
+        assert!(validate_durable_nats_url("tls://nats.example.test:4222").is_ok());
+        assert!(validate_durable_nats_url("nats://127.0.0.1:4222").is_ok());
+        assert!(validate_durable_nats_url("nats://nats.example.test:4222").is_err());
+    }
+
+    #[test]
+    fn durable_operations_require_a_separate_strong_attestation_key() {
+        assert!(validate_operation_configuration(false, None).is_ok());
+        assert!(validate_operation_configuration(true, None).is_err());
+        assert!(validate_operation_configuration(false, Some(&"k".repeat(32))).is_err());
+        assert!(validate_operation_configuration(true, Some("too-short")).is_err());
+        assert!(validate_operation_configuration(true, Some(&"k".repeat(32))).is_ok());
     }
 }
