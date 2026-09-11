@@ -1,10 +1,8 @@
 //! HTTP surface for Kubernetes probes and the guarded YouTube control plane.
 
 use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::Arc,
+    sync::atomic::{AtomicU64, Ordering},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -18,20 +16,24 @@ use axum::{
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use act_api_server::transport_runtime::OperationJournal;
+
 use crate::{
-    auth::{AuthFailure, require_bearer},
+    auth::{AuthFailure, AuthSubject, SharedAuthVerifier},
     nats,
     youtube::{YoutubeAction, YoutubeClientError, YoutubeGasClient, redact_map_for_audit},
 };
 
 const MAX_CONTROL_BODY_BYTES: usize = 1024 * 1024;
+const YOUTUBE_ADMIN_SCOPES: [&str; 1] = ["youtube:admin"];
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
 pub struct AppState {
     pub nats: Option<async_nats::Client>,
     pub youtube: Option<YoutubeGasClient>,
-    pub admin_api_key: Option<Arc<str>>,
+    pub shared_auth: Option<SharedAuthVerifier>,
+    pub operation_journal: Option<Arc<dyn OperationJournal>>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -40,6 +42,7 @@ pub fn router(state: AppState) -> Router {
         .route("/ready", get(ready))
         .route("/v1/youtube/health", get(youtube_health))
         .route("/v1/youtube/status", get(youtube_status))
+        .route("/v1/operations/:operation_id", get(operation_status))
         .route("/v1/youtube/actions/:action", post(youtube_action))
         .layer(DefaultBodyLimit::max(MAX_CONTROL_BODY_BYTES))
         .with_state(state)
@@ -62,7 +65,8 @@ async fn ready(State(state): State<AppState>) -> Json<Value> {
         "ready": true,
         "nats_connected": state.nats.is_some(),
         "youtube_configured": state.youtube.is_some(),
-        "admin_auth_configured": state.admin_api_key.is_some(),
+        "shared_auth_configured": state.shared_auth.is_some(),
+        "durable_operations_configured": state.operation_journal.is_some(),
     }))
 }
 
@@ -93,7 +97,7 @@ async fn youtube_status(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    authorize(&state, &headers)?;
+    authorize(&state, &headers).await?;
     let client = state
         .youtube
         .as_ref()
@@ -117,7 +121,7 @@ async fn youtube_action(
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
-    authorize(&state, &headers)?;
+    authorize(&state, &headers).await?;
     let action = YoutubeAction::parse(&action_name).ok_or_else(|| ApiError {
         status: StatusCode::NOT_FOUND,
         code: "UNKNOWN_YOUTUBE_ACTION",
@@ -198,24 +202,79 @@ async fn youtube_action(
     }
 }
 
-fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
-    require_bearer(headers, state.admin_api_key.as_deref()).map_err(|failure| match failure {
-        AuthFailure::NotConfigured => ApiError {
+async fn operation_status(
+    State(state): State<AppState>,
+    Path(operation_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let actor = authorize(&state, &headers).await?;
+    if operation_id.is_empty()
+        || operation_id.len() > 128
+        || operation_id.trim() != operation_id
+        || operation_id.chars().any(char::is_control)
+    {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "INVALID_OPERATION_ID",
+            message: "operation id is invalid".to_string(),
+            details: None,
+            request_id: None,
+        });
+    }
+    let journal = state.operation_journal.as_ref().ok_or_else(|| ApiError {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        code: "DURABLE_OPERATIONS_NOT_CONFIGURED",
+        message: "durable operation status is unavailable".to_string(),
+        details: None,
+        request_id: None,
+    })?;
+    let status = journal
+        .status(&operation_id, &actor.subject)
+        .await
+        .map_err(|_| ApiError {
             status: StatusCode::SERVICE_UNAVAILABLE,
-            code: "ADMIN_AUTH_NOT_CONFIGURED",
-            message: "ADMIN_API_KEY is not configured; administrative routes are closed"
-                .to_string(),
+            code: "DURABLE_OPERATION_STATUS_UNAVAILABLE",
+            message: "durable operation status is unavailable".to_string(),
             details: None,
             request_id: None,
-        },
-        AuthFailure::Missing | AuthFailure::Invalid => ApiError {
-            status: StatusCode::UNAUTHORIZED,
-            code: "UNAUTHORIZED",
-            message: "a valid Authorization: Bearer credential is required".to_string(),
+        })?
+        .ok_or_else(|| ApiError {
+            status: StatusCode::NOT_FOUND,
+            code: "OPERATION_NOT_FOUND",
+            message: "operation not found".to_string(),
             details: None,
             request_id: None,
-        },
-    })
+        })?;
+    Ok(Json(json!({"ok": true, "data": status})))
+}
+
+async fn authorize(state: &AppState, headers: &HeaderMap) -> Result<AuthSubject, ApiError> {
+    let verifier = state.shared_auth.as_ref().ok_or_else(|| ApiError {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        code: "SHARED_AUTH_NOT_CONFIGURED",
+        message: "Shared Auth is not configured; protected routes are closed".to_string(),
+        details: None,
+        request_id: None,
+    })?;
+    verifier
+        .verify(headers, &YOUTUBE_ADMIN_SCOPES)
+        .await
+        .map_err(|failure| match failure {
+            AuthFailure::Missing | AuthFailure::Invalid => ApiError {
+                status: StatusCode::UNAUTHORIZED,
+                code: "UNAUTHORIZED",
+                message: "a valid delegated Shared Auth bearer is required".to_string(),
+                details: None,
+                request_id: None,
+            },
+            AuthFailure::Unavailable => ApiError {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                code: "SHARED_AUTH_UNAVAILABLE",
+                message: "Shared Auth verification is unavailable".to_string(),
+                details: None,
+                request_id: None,
+            },
+        })
 }
 
 fn header_string(headers: &HeaderMap, name: &'static str) -> Result<Option<String>, ApiError> {
@@ -319,33 +378,19 @@ impl IntoResponse for ApiError {
 
 #[cfg(test)]
 mod tests {
-    use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
+    use axum::http::HeaderMap;
 
     use super::{AppState, authorize, request_id};
 
-    #[test]
-    fn administrative_routes_fail_closed() {
+    #[tokio::test]
+    async fn administrative_routes_fail_closed() {
         let state = AppState {
             nats: None,
             youtube: None,
-            admin_api_key: None,
+            shared_auth: None,
+            operation_journal: None,
         };
-        assert!(authorize(&state, &HeaderMap::new()).is_err());
-    }
-
-    #[test]
-    fn administrative_routes_accept_configured_key() {
-        let state = AppState {
-            nats: None,
-            youtube: None,
-            admin_api_key: Some("a-very-long-administrative-api-key".into()),
-        };
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_static("Bearer a-very-long-administrative-api-key"),
-        );
-        assert!(authorize(&state, &headers).is_ok());
+        assert!(authorize(&state, &HeaderMap::new()).await.is_err());
     }
 
     #[test]

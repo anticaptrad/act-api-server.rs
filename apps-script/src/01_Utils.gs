@@ -21,7 +21,7 @@ function sanitizeErrorDetails_(value, depth) {
   if (typeof value === 'object') {
     const clean = {};
     Object.keys(value).slice(0, 50).forEach(function(key) {
-      if (/token|secret|authorization|api.?key|upload.?url|body|content/i.test(key)) {
+      if (/token|secret|authorization|api.?key|upload.?url|body|content|base64|binary|file.?data/i.test(key)) {
         clean[key] = '[redacted]';
       } else {
         clean[key] = sanitizeErrorDetails_(value[key], depth + 1);
@@ -139,6 +139,14 @@ function sha256Hex_(text) {
     Utilities.Charset.UTF_8
   );
   return bytes.map(function(byte) {
+    const normalized = byte < 0 ? byte + 256 : byte;
+    return ('0' + normalized.toString(16)).slice(-2);
+  }).join('');
+}
+
+function sha256BytesHex_(bytes) {
+  const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, bytes);
+  return digest.map(function(byte) {
     const normalized = byte < 0 ? byte + 256 : byte;
     return ('0' + normalized.toString(16)).slice(-2);
   }).join('');

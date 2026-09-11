@@ -93,7 +93,10 @@ Anticaptrad YouTube/
 
 ## Upload workflow
 
-1. Put a source video in Drive.
+1. Put a source video in Drive. A trusted server may instead use the keyed,
+   SHA-256-verified `ingestVideo` HTTP action for an MP4/WebM/QuickTime file up
+   to 8 MiB; this is intended for bounded E2E fixtures, not normal production
+   media transfer.
 2. Copy the Drive file ID from its URL.
 3. Open the web app's **Upload** tab.
 4. Enter metadata, explicitly choose the audience setting, and confirm rights.
@@ -125,6 +128,8 @@ Main actions:
 - `analytics`
 - `exportAnalytics`
 - `jobs`
+- `ingestVideo` — bounded authenticated base64 ingest into the Drive Inbox;
+  retries are idempotent by `controlRequestId`
 - `startUpload` — accepts an optional `idempotencyKey`; reuse it when retrying the same request
 - `processUpload`
 - `processAllUploads`

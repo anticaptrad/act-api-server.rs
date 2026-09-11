@@ -14,7 +14,7 @@ const DEPLOYMENT_PROFILE = Object.freeze({
 
 const APP = Object.freeze({
   NAME: 'Anticaptrad YouTube Control Center',
-  VERSION: '1.0.3',
+  VERSION: '1.1.0',
   EXPECTED_CHANNEL_HANDLE: '@anticaptrad',
   ROOT_FOLDER_NAME: 'Anticaptrad YouTube',
   FOLDERS: Object.freeze({
@@ -28,8 +28,10 @@ const APP = Object.freeze({
   UPLOAD_CHUNK_BYTES: 8 * 1024 * 1024,
   MAX_CHUNKS_PER_RUN: 6,
   MAX_GMAIL_ATTACHMENT_BYTES: 20 * 1024 * 1024,
+  MAX_HTTP_INGEST_BYTES: 8 * 1024 * 1024,
   JOB_PREFIX: 'UPLOAD_JOB_',
   IDEMPOTENCY_PREFIX: 'UPLOAD_IDEMPOTENCY_',
+  HTTP_INGEST_PREFIX: 'HTTP_VIDEO_INGEST_',
   PROCESSED_GMAIL_PREFIX: 'GMAIL_DONE_',
   CONFIG_KEYS: Object.freeze({
     ROOT_FOLDER_ID: 'ROOT_FOLDER_ID',

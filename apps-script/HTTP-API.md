@@ -66,6 +66,30 @@ Returns the pinned channel identity and aggregate statistics.
 
 Use `exportAnalytics` with the same payload to save CSV and JSON copies in Drive.
 
+### `ingestVideo`
+
+Stores a small authenticated video payload in the Drive Inbox so a server can
+exercise the complete bridge without a second set of Google Drive OAuth
+credentials. The decoded file is limited to 8 MiB and must be MP4, WebM, or
+QuickTime media. Standard base64 and the exact SHA-256 digest are required.
+
+```json
+{
+  "action":"ingestVideo",
+  "apiKey":"...",
+  "controlRequestId":"youtube-e2e-ingest-SHA256",
+  "fileName":"anticaptrad-e2e-preview.mp4",
+  "mimeType":"video/mp4",
+  "sha256":"64-lowercase-hex-characters",
+  "base64":"BASE64_VIDEO_BYTES"
+}
+```
+
+Retries must reuse the same `controlRequestId`. An exact replay returns the
+existing Drive file; reuse with different bytes fails with
+`IDEMPOTENCY_CONFLICT`. Request bodies and base64 content must never be logged,
+placed in URLs, or included in CI artifacts.
+
 ### `startUpload`
 
 ```json
@@ -158,7 +182,7 @@ These actions exist only for an authorized Google Workspace administrator using 
 A consumer `@gmail.com` account cannot administer a Workspace directory.
 
 
-## HTTP security boundary (v1.0.3)
+## HTTP security boundary (v1.1.0)
 
 The HTTP surface is an explicit allowlist. `bootstrap`, `setup`, `saveConfig`, and
 `rotateApiKey` are owner-dashboard-only and return `ACTION_NOT_AVAILABLE` over
