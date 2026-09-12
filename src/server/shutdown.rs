@@ -1,5 +1,4 @@
 use std::{
-    env,
     future::pending,
     io::{self, IsTerminal, Read},
     time::{Duration, Instant},
@@ -155,7 +154,7 @@ pub(super) struct Config {
 
 impl Config {
     pub(super) fn from_env() -> Self {
-        let grace_ms = match env::var("SHUTDOWN_GRACE_MS") {
+        let grace_ms = match crate::flags::var("SHUTDOWN_GRACE_MS") {
             Ok(raw) => match raw.parse::<u64>() {
                 Ok(value) if value > 0 => value,
                 _ => {
@@ -168,7 +167,7 @@ impl Config {
                     DEFAULT_SHUTDOWN_GRACE_MS
                 }
             },
-            Err(env::VarError::NotPresent) => DEFAULT_SHUTDOWN_GRACE_MS,
+            Err(std::env::VarError::NotPresent) => DEFAULT_SHUTDOWN_GRACE_MS,
             Err(error) => {
                 tracing::warn!(
                     event = "shutdown_config_invalid",

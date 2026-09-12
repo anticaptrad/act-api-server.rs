@@ -37,14 +37,15 @@ impl Drop for TelemetryGuard {
 }
 
 pub fn init(service_name: &str) -> anyhow::Result<TelemetryGuard> {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,act_api_server=debug"));
+    let filter = EnvFilter::try_new(
+        crate::flags::var("RUST_LOG").unwrap_or_else(|_| "info,act_api_server=debug".into()),
+    )?;
     let resource = Resource::new(vec![
         KeyValue::new("service.name", service_name.to_string()),
         KeyValue::new("service.namespace", "anticaptrad"),
         KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
     ]);
-    let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+    let endpoint = crate::flags::var("OTEL_EXPORTER_OTLP_ENDPOINT")
         .ok()
         .filter(|value| !value.trim().is_empty());
     let (tracer_provider, tracer) = endpoint
