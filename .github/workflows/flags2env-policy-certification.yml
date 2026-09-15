@@ -1,0 +1,25 @@
+name: flags2env-policy-certification
+
+on:
+  pull_request:
+    paths: [".cli-flags.toml", "tests/flags2env_policy_contract.rs", ".github/workflows/flags2env-policy-certification.yml"]
+  push:
+    branches: [main]
+    paths: [".cli-flags.toml", "tests/flags2env_policy_contract.rs", ".github/workflows/flags2env-policy-certification.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  certify-policy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - shell: bash
+        run: |
+          set -euo pipefail
+          CARGO_MANIFEST_DIR="$PWD" rustc --edition=2021 --test tests/flags2env_policy_contract.rs -o "$RUNNER_TEMP/flags2env-policy"
+          "$RUNNER_TEMP/flags2env-policy" --nocapture
