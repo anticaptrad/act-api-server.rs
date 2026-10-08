@@ -4,11 +4,15 @@ on:
   pull_request:
     paths:
       - "test/fixtures/schema-authority-canary/**"
+      - "contracts/transport/**"
+      - "src/web_api_plane.rs"
       - ".github/workflows/typespec-json-schema-peer-authority.yml"
   push:
     branches: [main, dev]
     paths:
       - "test/fixtures/schema-authority-canary/**"
+      - "contracts/transport/**"
+      - "src/web_api_plane.rs"
       - ".github/workflows/typespec-json-schema-peer-authority.yml"
   schedule:
     - cron: "37 5 * * 1"
@@ -60,6 +64,33 @@ jobs:
           schema: test/fixtures/schema-authority-canary/authored.schema.json
           generated_schema: .typespec-json-schema-validator/generated/typespec.generated.schema.json
           expected_declarations: '["OreSchemaAuthority.AuthorityKind","OreSchemaAuthority.PeerAuthorityRegistration"]'
+
+      # This validates real service configuration rather than just the installation canary.
+      - name: Compare independent product transport TypeSpec and JSON Schema
+        uses: ORESoftware/typespec-json-schema-validator@5b04b08512f8a03a376dcb96818969e2d83c2d84
+        with:
+          typespec: contracts/transport/web-api-plane-binding.v1.tsp
+          schema: contracts/transport/web-api-plane-binding.v1.schema.json
+          report: .typespec-json-schema-validator/transport/report.json
+          contract_ir: .typespec-json-schema-validator/transport/contract-ir.json
+          output_dir: .typespec-json-schema-validator/transport/generated
+          max_probes: "64"
+
+      - name: Verify exact-head product transport IR and admission refusals
+        uses: ORESoftware/typespec-json-schema-validator/actions/test-consumer-admission@5b04b08512f8a03a376dcb96818969e2d83c2d84
+        with:
+          contract_ir: .typespec-json-schema-validator/transport/contract-ir.json
+          report: .typespec-json-schema-validator/transport/report.json
+          typespec: contracts/transport/web-api-plane-binding.v1.tsp
+          schema: contracts/transport/web-api-plane-binding.v1.schema.json
+          generated_schema: .typespec-json-schema-validator/transport/generated/typespec.generated.schema.json
+          expected_declarations: '["OresWebApiPlane.WebApiPlaneBinding"]'
+
+      - name: Ensure neither authored transport authority was overwritten
+        run: git diff --exit-code -- contracts/transport/
+
+      - name: Prove native API-plane constants match Schema A
+        run: cargo test --locked web_api_plane_binding_matches_peer_authority
 
       - name: Verify authored authorities were not modified
         shell: bash
