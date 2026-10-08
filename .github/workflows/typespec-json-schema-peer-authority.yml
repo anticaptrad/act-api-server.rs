@@ -45,7 +45,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - name: Generate Schema B and compare both peer authorities
-        uses: ORESoftware/typespec-json-schema-validator@5b04b08512f8a03a376dcb96818969e2d83c2d84
+        uses: ORESoftware/typespec-json-schema-validator@eb669d2c2c4f0800fac54f9b5a306b550121f1ac
         with:
           typespec: test/fixtures/schema-authority-canary/main.tsp
           schema: test/fixtures/schema-authority-canary/authored.schema.json
@@ -56,7 +56,7 @@ jobs:
 
       # This canary verifies gate admission, not unrelated product contracts.
       - name: Require current evidence and the canonical consumer-admission refusals
-        uses: ORESoftware/typespec-json-schema-validator/actions/test-consumer-admission@5b04b08512f8a03a376dcb96818969e2d83c2d84
+        uses: ORESoftware/typespec-json-schema-validator/actions/test-consumer-admission@eb669d2c2c4f0800fac54f9b5a306b550121f1ac
         with:
           contract_ir: .typespec-json-schema-validator/contract-ir.json
           report: .typespec-json-schema-validator/report.json
@@ -67,7 +67,7 @@ jobs:
 
       # This validates real service configuration rather than just the installation canary.
       - name: Compare independent product transport TypeSpec and JSON Schema
-        uses: ORESoftware/typespec-json-schema-validator@5b04b08512f8a03a376dcb96818969e2d83c2d84
+        uses: ORESoftware/typespec-json-schema-validator@eb669d2c2c4f0800fac54f9b5a306b550121f1ac
         with:
           typespec: contracts/transport/web-api-plane-binding.v1.tsp
           schema: contracts/transport/web-api-plane-binding.v1.schema.json
@@ -77,7 +77,7 @@ jobs:
           max_probes: "64"
 
       - name: Verify exact-head product transport IR and admission refusals
-        uses: ORESoftware/typespec-json-schema-validator/actions/test-consumer-admission@5b04b08512f8a03a376dcb96818969e2d83c2d84
+        uses: ORESoftware/typespec-json-schema-validator/actions/test-consumer-admission@eb669d2c2c4f0800fac54f9b5a306b550121f1ac
         with:
           contract_ir: .typespec-json-schema-validator/transport/contract-ir.json
           report: .typespec-json-schema-validator/transport/report.json
