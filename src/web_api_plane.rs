@@ -68,4 +68,23 @@ mod tests {
         );
         assert_eq!(caps.nats_url_in_cluster, "nats://dd-nats.messaging.svc.cluster.local:4222");
     }
+    #[test]
+    fn web_api_plane_binding_matches_peer_authority() {
+        // TJSV compares separately authored TypeSpec and Schema A; this
+        // native test proves the Schema A constants match the deployed plane.
+        let authored = include_str!("../contracts/transport/web-api-plane-binding.v1.schema.json");
+        let schema: serde_json::Value = serde_json::from_str(authored).expect("valid authored schema");
+        let props = &schema["$defs"]["WebApiPlaneBinding"]["properties"];
+        let caps = capabilities();
+        for (key, actual) in [
+            ("githubOrg", GITHUB_ORG),
+            ("orgSlug", ORG_SLUG),
+            ("dnsZone", DNS_ZONE),
+            ("apiHost", caps.api_host.as_str()),
+            ("natsRequestSubject", caps.nats_request_subject.as_str()),
+        ] {
+            assert_eq!(props[key]["const"].as_str(), Some(actual), "{key}");
+        }
+    }
+
 }
