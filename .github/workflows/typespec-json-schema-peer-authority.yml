@@ -89,7 +89,35 @@ jobs:
       - name: Ensure neither authored transport authority was overwritten
         run: git diff --exit-code -- contracts/transport/
 
+      # Cargo's pinned private Git dependencies require a fleet-scoped read token.
+      # Never persist this credential into generated artifacts or the repository.
+      - name: Require authenticated access to private Rust dependencies
+        shell: bash
+        env:
+          TEST_FLEET_READ_TOKEN: ${{ secrets.TEST_FLEET_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${TEST_FLEET_READ_TOKEN}" ]]; then
+            echo "::error::TEST_FLEET_READ_TOKEN is required to execute native Cargo conformance; TypeSpec parity alone is not admission."
+            exit 1
+          fi
+          umask 077
+          cat > "${RUNNER_TEMP}/ores-private-git-askpass.sh" <<'SH'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf 'x-access-token\n' ;;
+            *Password*) printf '%s\n' "$TEST_FLEET_READ_TOKEN" ;;
+            *) exit 1 ;;
+          esac
+          SH
+          chmod 700 "${RUNNER_TEMP}/ores-private-git-askpass.sh"
+
       - name: Prove native API-plane constants match Schema A
+        env:
+          TEST_FLEET_READ_TOKEN: ${{ secrets.TEST_FLEET_READ_TOKEN }}
+          GIT_ASKPASS: ${{ runner.temp }}/ores-private-git-askpass.sh
+          GIT_TERMINAL_PROMPT: "0"
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: cargo test --locked web_api_plane_binding_matches_peer_authority
 
       - name: Verify authored authorities were not modified
