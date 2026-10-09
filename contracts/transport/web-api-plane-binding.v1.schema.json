@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "anticaptrad.web-api-plane-binding.v1.schema.json",
+  "$defs": {
+    "WebApiPlaneBinding": {
+      "$id": "WebApiPlaneBinding",
+      "type": "object",
+      "properties": {
+        "githubOrg": {
+          "type": "string",
+          "const": "anticaptrad"
+        },
+        "orgSlug": {
+          "type": "string",
+          "const": "anticaptrad"
+        },
+        "dnsZone": {
+          "type": "string",
+          "const": "anticaptrad.dev"
+        },
+        "apiHost": {
+          "type": "string",
+          "const": "api.anticaptrad.dev"
+        },
+        "natsRequestSubject": {
+          "type": "string",
+          "const": "dd.remote.web_api.anticaptrad.request"
+        }
+      },
+      "required": [
+        "githubOrg",
+        "orgSlug",
+        "dnsZone",
+        "apiHost",
+        "natsRequestSubject"
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}
