@@ -285,7 +285,10 @@ mod tests {
         assert!(!err.contains("hidden-secret"));
         let values = resolve_from(
             &["server".into()],
-            [("ACT_NATS_OPERATION_HMAC_KEY".into(), "env-only-secret".into())],
+            [(
+                "ACT_NATS_OPERATION_HMAC_KEY".into(),
+                "env-only-secret".into(),
+            )],
         )
         .expect("inherited secret is allowed");
         assert_eq!(
