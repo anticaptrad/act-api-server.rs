@@ -272,15 +272,28 @@ mod tests {
     #[test]
     fn secrets_are_environment_only_and_untrusted_argv_values_are_not_echoed() {
         let err = resolve_from(
-            &["server".into(), "--act-nats-operation-hmac-key=hidden-secret".into()],
-            [("ACT_NATS_OPERATION_HMAC_KEY".into(), "env-only-secret".into())],
-        ).expect_err("secret argv must be rejected");
+            &[
+                "server".into(),
+                "--act-nats-operation-hmac-key=hidden-secret".into(),
+            ],
+            [(
+                "ACT_NATS_OPERATION_HMAC_KEY".into(),
+                "env-only-secret".into(),
+            )],
+        )
+        .expect_err("secret argv must be rejected");
         assert!(!err.contains("hidden-secret"));
         let values = resolve_from(
             &["server".into()],
             [("ACT_NATS_OPERATION_HMAC_KEY".into(), "env-only-secret".into())],
-        ).expect("inherited secret is allowed");
-        assert_eq!(values.get("ACT_NATS_OPERATION_HMAC_KEY").map(String::as_str), Some("env-only-secret"));
+        )
+        .expect("inherited secret is allowed");
+        assert_eq!(
+            values
+                .get("ACT_NATS_OPERATION_HMAC_KEY")
+                .map(String::as_str),
+            Some("env-only-secret")
+        );
     }
 
     #[test]
