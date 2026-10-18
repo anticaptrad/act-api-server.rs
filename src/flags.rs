@@ -132,14 +132,9 @@ fn resolve_from(
         ));
     }
 
-    let mut raw = parsed.dotenv;
-    raw.extend(
-        environment
-            .iter()
-            .map(|(name, value)| (name.clone(), value.clone())),
-    );
-    raw.extend(parsed.dotenv_overrides);
-    raw.remove("FLAGS2ENV_COMMAND");
+    // This privileged server must never accept implicit working-directory
+    // dotenv data. Process environment is the sole ambient authority.
+    let mut raw = environment.clone();
     raw.extend(parsed.provided_flags);
     let typed = parser
         .coerce::<serde_json::Map<String, serde_json::Value>, _>(&raw, Some(path))
@@ -272,6 +267,20 @@ mod tests {
             resolved.get(&flag.1).map(String::as_str),
             Some(command_line_value)
         );
+    }
+
+    #[test]
+    fn secrets_are_environment_only_and_untrusted_argv_values_are_not_echoed() {
+        let err = resolve_from(
+            &["server".into(), "--act-nats-operation-hmac-key=hidden-secret".into()],
+            [("ACT_NATS_OPERATION_HMAC_KEY".into(), "env-only-secret".into())],
+        ).expect_err("secret argv must be rejected");
+        assert!(!err.contains("hidden-secret"));
+        let values = resolve_from(
+            &["server".into()],
+            [("ACT_NATS_OPERATION_HMAC_KEY".into(), "env-only-secret".into())],
+        ).expect("inherited secret is allowed");
+        assert_eq!(values.get("ACT_NATS_OPERATION_HMAC_KEY").map(String::as_str), Some("env-only-secret"));
     }
 
     #[test]
